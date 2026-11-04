@@ -9,6 +9,9 @@ __pycache__/
 node_modules/
 frontend/dist/
 
+# C++ agent build output
+agent/build/
+
 # Secrets (keep the template)
 .env
 .env.*
