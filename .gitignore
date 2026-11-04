@@ -1,0 +1,58 @@
+# Python
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Secrets (keep the template)
+.env
+.env.*
+!.env.example
+
+# Claude Code personal settings (.claude/settings.json stays tracked)
+.claude/settings.local.json
+
+# Data and logs
+data/raw/
+data/recordings/
+*.evtx
+*.jsonl
+
+# Models
+*.pkl
+*.joblib
+triage/models/
+
+# Vector DB
+chroma/
+.chroma/
+chroma_db/
+
+# Large lab files
+*.iso
+*.vmdk
+*.vmx
+
+# EMBER data
+ember2018/
+ember_dataset*
+*.dat
+
+# Test material that must never enter the repo
+eicar.com
+eicar.com.txt
+*.exe
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Keep the shared sample files (must stay after the *.jsonl rule)
+!contracts/samples/*.jsonl
+!contracts/samples/*.json
