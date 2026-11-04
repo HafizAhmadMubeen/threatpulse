@@ -101,6 +101,8 @@ Policy rules live in `rules/policy.yaml` (subject / object / environment attribu
 - Validate any produced Event/Alert/Decision/Report against the schemas in `contracts/`.
 - Write tests for policy rules, feature extraction and the report validator.
 
+Commits and pull requests: never add Co-Authored-By lines or 'Generated with Claude Code' text. Use the commit message exactly as given. The repo is public: never commit secrets, real (non-lab) data, or logs and screenshots from a developer workstation.
+
 ## Non-negotiable design rules
 
 1. **The LLM never triggers enforcement.** Enforcement comes only from the deterministic policy engine. `policy/` must never import from the RAG/LLM code, and policy code never reads LLM output.
