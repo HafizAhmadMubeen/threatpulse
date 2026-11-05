@@ -1,0 +1,27 @@
+{
+  "event_id": "e-20261105T092955-900000001",
+  "ts": "2026-11-05T09:33:01.020Z",
+  "host": "lab-vm-01",
+  "source": "fim",
+  "event_type": "fim_change",
+  "pid": 0,
+  "ppid": 0,
+  "process": {
+    "image": "unknown",
+    "cmdline": null,
+    "user": null,
+    "sha256": null,
+    "signed": false,
+    "signer": null
+  },
+  "target": {
+    "path": null,
+    "old_path": null,
+    "registry_key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\AtomicTest",
+    "pid": null,
+    "access_mask": null,
+    "access_rights": null,
+    "dest_ip": null,
+    "dest_port": null
+  }
+}

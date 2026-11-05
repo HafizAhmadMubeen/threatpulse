@@ -1,0 +1,20 @@
+{
+  "report_id": "r-0004",
+  "alert_id": "a-0004",
+  "summary": "reg.exe added a Run key that would start a program at every logon. The change was not approved, so the key was removed. reg.exe had already exited, so nothing was suspended.",
+  "techniques": [
+    {
+      "id": "T15471",
+      "name": "Registry Run Keys / Startup Folder",
+      "evidence": "reg.exe set the value AtomicTest under the HKCU Run key, and FIM confirmed it differs from the baseline."
+    }
+  ],
+  "timeline": [
+    "09:33:00 powershell.exe started cmd.exe",
+    "09:33:00 cmd.exe started reg.exe",
+    "09:33:00 reg.exe wrote the AtomicTest Run value",
+    "09:33:01 FIM reported the value as added",
+    "09:33:01 The value was removed to restore the baseline"
+  ],
+  "validated": true
+}

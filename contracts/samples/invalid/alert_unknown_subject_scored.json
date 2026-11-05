@@ -1,0 +1,27 @@
+{
+  "alert_id": "a-0005",
+  "ts": "2026-11-05T09:34:01.000Z",
+  "layer": "fim",
+  "rule_id": "R-FIM-HOSTS",
+  "technique_ids": [],
+  "risk_score": 0.5,
+  "event_type": "fim_change",
+  "subject": {
+    "pid": 0,
+    "image": "unknown",
+    "signed": false,
+    "signer": null,
+    "trusted_path": false,
+    "ancestors": []
+  },
+  "object": {
+    "zone": "persistence",
+    "path": "C:\\Windows\\System32\\drivers\\etc\\hosts",
+    "registry_key": null,
+    "access": [],
+    "file_sha256": "c9e120b61db35f2f065d90aa091c94404f1ecd0cf7238a4c71dfaf891d40d4f0"
+  },
+  "evidence_event_ids": [
+    "e-20261105T092955-900000002"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "event_id": "e-0042",
+  "ts": "2026-11-05T09:30:05.104Z",
+  "host": "lab-vm-01",
+  "source": "etw",
+  "event_type": "process_start",
+  "pid": 4100,
+  "ppid": 3120,
+  "process": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe",
+    "user": "LAB-VM-01\\lab",
+    "sha256": "cc97c6c938ff5abe74231f9c6264acfa884415568b006c682b4af00a55324f4a",
+    "signed": true,
+    "signer": "Microsoft Windows"
+  },
+  "target": {
+    "path": null,
+    "old_path": null,
+    "registry_key": null,
+    "pid": null,
+    "access_mask": null,
+    "access_rights": null,
+    "dest_ip": null,
+    "dest_port": null,
+    "change": null
+  }
+}

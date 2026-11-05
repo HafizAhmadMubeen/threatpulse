@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatPulse Report",
+  "description": "Produced by the RAG agent for the dashboard (PLANNING.md Section 5.4). Text only: nothing in a report can trigger enforcement.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["report_id", "alert_id", "summary", "techniques", "timeline", "validated"],
+  "properties": {
+    "report_id": {
+      "description": "r-<same counter as the alert>.",
+      "type": "string",
+      "pattern": "^r-[0-9]{4,}$"
+    },
+    "alert_id": { "type": "string", "pattern": "^a-[0-9]{4,}$" },
+    "summary": { "type": "string", "minLength": 1 },
+    "techniques": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "evidence"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$" },
+          "name": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "validated": {
+      "description": "True when every technique ID was checked against the ATT&CK STIX data.",
+      "type": "boolean"
+    }
+  }
+}

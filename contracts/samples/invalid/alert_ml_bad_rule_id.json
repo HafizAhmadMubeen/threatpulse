@@ -1,0 +1,40 @@
+{
+  "alert_id": "a-0007",
+  "ts": "2026-11-05T09:35:02.000Z",
+  "layer": "ml",
+  "rule_id": "R-T1486-001",
+  "technique_ids": [
+    "T1486"
+  ],
+  "risk_score": 0.97,
+  "event_type": "file_delete",
+  "subject": {
+    "pid": 6120,
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "signed": true,
+    "signer": "Microsoft Windows",
+    "trusted_path": true,
+    "ancestors": [
+      {
+        "pid": 4100,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      },
+      {
+        "pid": 3120,
+        "image": "C:\\Windows\\explorer.exe"
+      }
+    ]
+  },
+  "object": {
+    "zone": "documents",
+    "path": "C:\\Users\\lab\\Documents\\tp_dummy\\dummy_3.txt",
+    "registry_key": null,
+    "access": [],
+    "file_sha256": null
+  },
+  "evidence_event_ids": [
+    "e-20261105T093000-000029",
+    "e-20261105T093000-000030",
+    "e-20261105T093000-000031"
+  ]
+}

@@ -38,6 +38,7 @@
         "file_rename",
         "file_delete",
         "registry_set",
+        "registry_delete",
         "network_connect",
         "fim_change"
       ]
@@ -80,7 +81,7 @@
       ],
       "properties": {
         "path": {
-          "description": "For file_rename, the new path. For file_delete, the deleted file.",
+          "description": "For file_rename, the new path. For file_delete, the deleted file. For process_access, the target's image.",
           "type": ["string", "null"]
         },
         "old_path": {
@@ -89,12 +90,32 @@
         },
         "registry_key": { "type": ["string", "null"] },
         "pid": { "type": ["integer", "null"], "minimum": 0 },
-        "access_mask": { "type": ["string", "integer", "null"] },
+        "access_mask": {
+          "description": "The raw mask as a hex string, for example 0x1010.",
+          "type": ["string", "integer", "null"]
+        },
+        "access_rights": {
+          "description": "The decoded access_mask, for example vm_read. Set only for process_access.",
+          "type": ["array", "null"],
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
         "dest_ip": { "type": ["string", "null"] },
         "dest_port": {
           "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 65535
+        },
+        "change": {
+          "description": "What changed. Set only for fim_change. Files give SHA-256 values, registry values give the data.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["kind", "old_value", "new_value"],
+          "properties": {
+            "kind": { "enum": ["added", "modified", "removed"] },
+            "old_value": { "type": ["string", "null"] },
+            "new_value": { "type": ["string", "null"] }
+          }
         }
       }
     }
@@ -109,10 +130,26 @@
       }
     },
     {
-      "if": { "properties": { "event_type": { "const": "registry_set" } } },
+      "if": { "properties": { "event_type": { "enum": ["registry_set", "registry_delete"] } } },
       "then": {
         "properties": {
           "target": { "properties": { "registry_key": { "type": "string" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "fim_change" } } },
+      "then": {
+        "properties": {
+          "target": {
+            "required": ["change"],
+            "properties": { "change": { "type": "object" } }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "target": { "properties": { "change": { "type": "null" } } }
         }
       }
     }
