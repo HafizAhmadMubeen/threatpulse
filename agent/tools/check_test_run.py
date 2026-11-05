@@ -8,6 +8,8 @@ Exit code 0 means every check passed, 1 means at least one failed.
 A write with no path can't be placed in a folder, so "every write under the
 Documents test folder has a path" is checked through the process that made them:
 every write by the test process must have a path.
+
+ETW and Sysmon can report the same action, so each check names the source it proves.
 """
 
 import argparse
@@ -16,8 +18,12 @@ import sys
 from pathlib import Path
 
 TEST_FOLDER = "\\documents\\threatpulsetest"
-RUN_KEY = "hkcu\\software\\microsoft\\windows\\currentversion\\run\\threatpulsetest"
+RUN_ROOT = "hkcu\\software\\microsoft\\windows\\currentversion\\"
+RUN_KEY = RUN_ROOT + "run\\threatpulsetest"
+RUN_ONCE_KEY = RUN_ROOT + "runonce\\threatpulsetest"
 EXPECTED_FILES = 25
+WEB_PORT = 443
+DUMMY_MASK = "0x21410"
 
 
 def load_events(path: Path) -> list[dict]:
@@ -29,13 +35,29 @@ def path_of(event: dict) -> str:
     return (event["target"]["path"] or "").lower()
 
 
+def key_of(event: dict) -> str:
+    return (event["target"]["registry_key"] or "").lower()
+
+
 def in_test_folder(event: dict) -> bool:
     return TEST_FOLDER + "\\" in path_of(event)
 
 
 def run_checks(events: list[dict], test_pid: int) -> list[tuple[str, bool, str]]:
-    def of_type(event_type: str) -> list[dict]:
-        return [event for event in events if event["event_type"] == event_type]
+    def of_type(event_type: str, source: str = "etw") -> list[dict]:
+        return [
+            event for event in events
+            if event["event_type"] == event_type and event["source"] == source
+        ]
+
+    def registry(event_type: str, source: str, key: str) -> list[dict]:
+        return [event for event in of_type(event_type, source) if key_of(event) == key]
+
+    def connections(source: str) -> list[dict]:
+        return [
+            event for event in of_type("network_connect", source)
+            if event["pid"] == test_pid and event["target"]["dest_port"] == WEB_PORT
+        ]
 
     creates = [event for event in of_type("file_create") if in_test_folder(event)]
     folder_writes = [event for event in of_type("file_write") if in_test_folder(event)]
@@ -43,10 +65,7 @@ def run_checks(events: list[dict], test_pid: int) -> list[tuple[str, bool, str]]
     test_pathless = [event for event in test_writes if not event["target"]["path"]]
     renames = [event for event in of_type("file_rename") if in_test_folder(event)]
     deletes = [event for event in of_type("file_delete") if in_test_folder(event)]
-    run_keys = [
-        event for event in of_type("registry_set")
-        if (event["target"]["registry_key"] or "").lower() == RUN_KEY
-    ]
+    run_keys = registry("registry_set", "etw", RUN_KEY)
 
     deleted = {path_of(event).rsplit("\\", 1)[-1] for event in deletes}
     originals = {f"dummy{number}.txt" for number in range(1, EXPECTED_FILES + 1)}
@@ -67,6 +86,24 @@ def run_checks(events: list[dict], test_pid: int) -> list[tuple[str, bool, str]]
             and path_of(event).endswith("\\dummy1.locked")
         ]
 
+    sysmon_run = registry("registry_set", "sysmon", RUN_KEY)
+    sysmon_run_once = registry("registry_set", "sysmon", RUN_ONCE_KEY)
+    sysmon_delete = registry("registry_delete", "sysmon", RUN_KEY)
+
+    etw_connections = connections("etw")
+    sysmon_connections = connections("sysmon")
+    etw_ips = {event["target"]["dest_ip"] for event in etw_connections}
+    sysmon_ips = {event["target"]["dest_ip"] for event in sysmon_connections}
+
+    dummy_access = [
+        event for event in of_type("process_access", "sysmon")
+        if event["pid"] == test_pid
+        and path_of(event).endswith("\\ping.exe")
+        and event["target"]["pid"]
+        and str(event["target"]["access_mask"]).lower() == DUMMY_MASK
+        and "vm_read" in (event["target"]["access_rights"] or [])
+    ]
+
     return [
         ("Run key has the full key", bool(run_keys), f"{len(run_keys)} events"),
         ("files created in the test folder", len(creates) >= EXPECTED_FILES, f"{len(creates)} events"),
@@ -82,6 +119,20 @@ def run_checks(events: list[dict], test_pid: int) -> list[tuple[str, bool, str]]
          f"{len(originals & deleted)} of {len(originals)}"),
         ("file_delete for the delete-on-close file", "delete-on-close.tmp" in deleted, ""),
         ("the folder itself is not a file_delete", not folder_reported, ""),
+        ("Sysmon: registry_set for the HKCU Run key", bool(sysmon_run),
+         f"{len(sysmon_run)} events"),
+        ("Sysmon: registry_set for the HKCU RunOnce key", bool(sysmon_run_once),
+         f"{len(sysmon_run_once)} events"),
+        ("Sysmon: registry_delete for the HKCU Run key", bool(sysmon_delete),
+         f"{len(sysmon_delete)} events"),
+        ("ETW: network_connect to port 443 by the test process", bool(etw_connections),
+         f"{len(etw_connections)} events"),
+        ("Sysmon: network_connect to port 443 by the test process", bool(sysmon_connections),
+         f"{len(sysmon_connections)} events"),
+        ("ETW and Sysmon report the same destination IP", bool(etw_ips & sysmon_ips),
+         f"etw {sorted(etw_ips)}, sysmon {sorted(sysmon_ips)}"),
+        ("Sysmon: process_access on the dummy process has vm_read", bool(dummy_access),
+         f"{len(dummy_access)} events"),
     ]
 
 

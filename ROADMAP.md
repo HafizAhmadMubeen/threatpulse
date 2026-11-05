@@ -60,6 +60,14 @@ def write_report(alert: Alert, events: list[Event]) -> Report: ...  # LLM, text 
 
 Until a real function exists, its owner provides a **stub** that returns sample data. That way the other tracks can call it from day one.
 
+Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
+
+- **Alerts with no known process** have `pid` 0, `image` `"unknown"`, `signed` false, `trusted_path` false and `risk_score` null. `evidence_event_ids` may be empty only then.
+- **`risk_score` is nullable.** Null means not scored, and `decide` treats null as not matching `risk_score_gte`.
+- **`rule_id`** is `ML-TRIAGE` for `ml` alerts and `SIG-<name>` for `signature` alerts.
+- **Decisions** have a decision-level `ts`, and each action has `executed_at`. `request_kill` and `request_delete` have `reviewed_by` and `reviewed_at`, set on approve or reject. Automatic actions use only `executed`, `failed` and `skipped`. `reason` is required on `skipped` and `failed`, and `policy_rules` may be empty.
+- **`/fim/changes/{id}/approve`** takes the `event_id` of the `fim_change` event as `{id}`.
+
 ## 3. Phase-by-phase tasks
 
 ### Phase 0: Foundation

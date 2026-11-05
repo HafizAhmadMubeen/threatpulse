@@ -4,12 +4,15 @@
 // comes from this table. Kernel-Process start events carry no command line or
 // user, so those are read from the live process. ETW delivers events with a
 // delay, so a short-lived process may already be gone: cmdline is then null.
-// Only the ETW thread touches this class, so it needs no locks.
+//
+// Only the ETW thread changes the table. It reads without a lock, and it locks each
+// change. Other threads use only snapshot(), which locks and returns a copy.
 #pragma once
 
 #include <windows.h>
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -61,6 +64,10 @@ public:
     // `event_user` is the user attached to the event, used if the table has none.
     const ProcessInfo& lookup(uint32_t pid, const ResolvedUser* event_user);
 
+    // For other threads. Empty if the pid isn't in the table: unlike lookup(), this
+    // never adds an entry or opens the process.
+    std::optional<ProcessInfo> snapshot(uint32_t pid) const;
+
     UserResolver& users() { return users_; }
 
 private:
@@ -71,6 +78,7 @@ private:
 
     const PathMapper& paths_;
     UserResolver users_;
+    mutable std::mutex mutex_;
     std::unordered_map<uint32_t, ProcessInfo> processes_;
     ULONGLONG last_sweep_tick_ = 0;
 };

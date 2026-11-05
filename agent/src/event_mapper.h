@@ -60,6 +60,11 @@ public:
     void on_registry_set(const EventContext& context, uint64_t key_object, uint32_t status,
                          std::wstring_view key_name, std::wstring_view value_name);
 
+    // Kernel-Network. `pid` comes from the event data, because the event header can
+    // name a different process, such as System.
+    void on_network_connect(const EventContext& context, uint32_t pid, std::wstring dest_ip,
+                            uint16_t dest_port);
+
 private:
     bool is_own(const EventContext& context) const { return context.header_pid == own_pid_; }
     PendingEvent make_event(const EventContext& context, const char* type, uint32_t pid,

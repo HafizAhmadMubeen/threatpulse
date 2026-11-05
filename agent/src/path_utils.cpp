@@ -79,4 +79,15 @@ std::wstring normalize_registry_key(std::wstring_view kernel_key,
     return L"HKU\\" + std::wstring(sid) + std::wstring(rest);
 }
 
+std::wstring normalize_sysmon_registry_key(std::wstring_view sysmon_key,
+                                           const std::optional<std::wstring>& user_sid) {
+    constexpr std::wstring_view kSysmonUsers = L"HKU\\";
+    if (!istarts_with(sysmon_key, kSysmonUsers)) return std::wstring(sysmon_key);
+
+    std::wstring kernel_key(kUsers);
+    kernel_key += L"\\";
+    kernel_key += sysmon_key.substr(kSysmonUsers.size());
+    return normalize_registry_key(kernel_key, user_sid);
+}
+
 }  // namespace tp

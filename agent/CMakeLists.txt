@@ -47,6 +47,7 @@ add_executable(threatpulse_agent
     src/filters.cpp
     src/path_utils.cpp
     src/jsonl_writer.cpp
+    src/sysmon_reader.cpp
 )
 
 target_compile_definitions(threatpulse_agent PRIVATE
@@ -67,7 +68,9 @@ target_link_libraries(threatpulse_agent PRIVATE
     rpcrt4
     tdh
     user32
+    wevtapi
     wintrust
+    ws2_32
 )
 
 # The default --config path is filters.json next to the executable.
