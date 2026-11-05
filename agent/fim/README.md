@@ -109,6 +109,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File agent\tools\vm_test_fim.ps1 
 agent\.venv\Scripts\python agent\tools\check_fim_run.py C:\ThreatPulseLab\logs\fim.jsonl C:\ThreatPulseLab\logs\fim_test_keys.txt --poll-only
 ```
 
+## What the VM has shown
+
+Results of the first complete VM run, with event-driven watching:
+
+| Check | Result |
+|---|---|
+| `check_fim_run.py` | 12 of 12 checks passed, covering all six Run and RunOnce keys, `hosts` and the startup folder |
+| Time after Sysmon's event for the same Run value | 0.0 seconds, so a notification found the change, not the 60-second compare |
+| `validate_events.py` on `fim.jsonl` | 0 invalid |
+| A second `watch` after the test | `Changes reported: 0`, so the test undid everything and the baseline still matched |
+
+**Step 2.2 is verified for event-driven watching.** The 60-second compare has passed in WSL tests only: its `--poll-only` VM result has not been recorded yet.
+
 ## Limits
 
 | Limit | Effect |

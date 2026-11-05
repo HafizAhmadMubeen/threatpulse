@@ -115,7 +115,7 @@ Remove-Item -Recurse C:\ThreatPulseLab\agent-test
 | 1.3 | `Show-Events file_write agent-test` | `path` is `...\agent-test\a.txt` |
 | 1.3 | `Show-Events file_rename agent-test` | `path` ends in `b.txt` and `old_path` in `a.txt` |
 | 1.3 | `Show-Events file_delete agent-test` | `path` ends in `b.txt`. The `agent-test` folder itself is not listed |
-| 1.3 | `Select-String -Path $log -SimpleMatch 'threatpulse_agent'` | No results: the agent's own events are dropped |
+| 1.3 | `Select-String -Path $log -Pattern '"image":"[^"]*threatpulse_agent'` | No results: the agent's own events are dropped. Its name can still appear as a target, when Sysmon reports another process opening it |
 | 1.4 | `Show-Events process_start 'System32\\cmd'` | `signed: True`, `signer: Microsoft Windows`, 64-character `sha256` |
 | 1.4 | `Show-Events process_start notepad` | `signed: True`. See the note below |
 | 1.2 | Validate the file (below) | `0 invalid` |
@@ -364,9 +364,11 @@ Results of the fourth VM run, with the reader fixed:
 | File writes with a path, `Started after agent` | 96.6% (308 of 319), above the 95% target |
 | Registry writes with a full key, `Started after agent` | 92.6% (113 of 122). There is no target for this |
 
-**Step 2.1 is verified, except for LSASS.** The `process_access` path works on a dummy process, but LSASS access itself stays open until Atomic T1003.001 in step 2.3. The HKLM Run and RunOnce keys are also untested in the VM: only their Sysmon rule was checked.
+**Step 2.1 is verified, except for LSASS.** The `process_access` path works on a dummy process, but LSASS access itself stays open until Atomic T1003.001 in step 2.3. For the HKLM Run and RunOnce keys, only FIM's handling has been tested in the VM: nothing has checked Sysmon's events for them.
 
 File coverage depends on what Windows is doing during a run. The third run's gaps came from Windows Update (`MpSigStub`, `wuaucltcore`), svchost services and OneDrive, not from the test, so no resolver change is needed. In the fourth run the gaps were svchost (8) and OneDrive (3). Its registry gaps were PowerShell (5), conhost (2) and ping (1).
+
+**Step 2.2 (FIM) is verified for event-driven watching.** `check_fim_run.py` passed 12 of 12 checks, and FIM found the change 0.0 seconds after Sysmon. The VM result for its 60-second compare has not been recorded yet. See [fim/README.md](fim/README.md).
 
 Settled in the VM:
 
