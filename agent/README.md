@@ -143,6 +143,8 @@ agent\.venv\Scripts\python agent\tools\check_test_run.py C:\ThreatPulseLab\logs\
 | ETW and Sysmon both report the web request, with the same destination IP | `check_test_run.py`. A byte-order mistake in the ETW fields would fail this or the port 443 check |
 | The dummy process access is decoded with `vm_read` | `check_test_run.py`. The LSASS check itself stays open until step 2.3 |
 
+To see which programs caused any gaps, run `agent\.venv\Scripts\python agent\tools\coverage_report.py <events.jsonl>`.
+
 **Clean stop after a crash:**
 
 ```powershell
@@ -260,7 +262,7 @@ A child process writing through a handle its parent opened gets a null path. A s
 | Zone signals, which may be ML features | Sysmon: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13) |
 | Detection rules | Either source |
 
-**What `sysmon-modular` covers.** This was checked by testing sample events against the rules of release `configs-a45dedb13a43`, not against Sysmon itself. `Sysmon64.exe -c` shows the rules loaded in the VM.
+**What `sysmon-modular` covers.** This was checked by testing sample events against the rules of release `configs-a45dedb13a43`, not against Sysmon itself. In the VM, the installed `sysmonconfig.xml` has the same Run and `0x21410` rules, and the third run produced events for HKCU Run, HKCU RunOnce and `0x21410`. The HKLM rows are not yet tested in the VM. Piping `Sysmon64.exe -c` into `Select-String` finds nothing there, so search the XML file instead.
 
 | Area | Result |
 |---|---|
@@ -333,6 +335,20 @@ Results of the second VM run, with default options and `tools/vm_test_activity.p
 
 These results predate the Sysmon and network work, so they cover steps 1.1 to 1.4 only.
 
+Results of the third VM run, the first with step 2.1:
+
+| Check | Result |
+|---|---|
+| `validate_events.py` | 6651 events, 0 invalid |
+| `check_test_run.py` | 17 of 17 checks passed |
+| Writes by the test process with a path | 100% (132 of 132) |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors` | 0, 0, 0 |
+| File writes with a path, `Started after agent` | **93.9% (663 of 706), below the 95% target** |
+| Registry writes with a full key, `Started after agent` | 96.0% |
+| `Sysmon read errors` | **783, about one per poll** |
+
+The likely cause is that the reader treated an empty subscription's answer, `ERROR_INVALID_OPERATION`, as a failure. It then replaced its subscription each time, so events could be lost in the gap. The fix is not yet confirmed in the VM. Don't use this run's Sysmon counts as a measure of what Sysmon logged.
+
 Settled in the VM:
 
 | Question | Answer | Run |
@@ -344,12 +360,16 @@ Settled in the VM:
 | Do the test script's writes resolve, also after a rename? | Yes. All 127 have a path, and writes after the rename use the new name | Second |
 | Does `file_delete` work? | Yes. All 25 originals and the delete-on-close file were reported, and the folder itself was not | Second |
 | Does the Close event-ID filter work at this load? | Yes. Windows accepted it, delete-on-close detection worked and no events were lost, so `--no-close-events` wasn't needed | Second |
+| Are `daddr` and `dport` in network byte order? | Yes. ETW and Sysmon gave the same IP, on port 443 | Third |
+| Does Windows accept the Kernel-Network event-ID filter? | Yes, with no events lost at this load | Third |
+| Does the agent decode the access mask, and see Sysmon deletions? | Yes. `0x21410` gave `vm_read`, and removing the Run value gave `registry_delete` | Third |
 
 ## Questions to settle in the VM
 
 | Question | How to tell | If the answer is bad |
 |---|---|---|
-| Do the step 2.1 events work? | `check_test_run.py` passes all 17 checks | See which check failed. This code has not been compiled or run yet |
+| Which programs keep file coverage below 95%? | `coverage_report.py` on the third run's log | Look for a shared cause, such as children writing through a parent's handle |
+| Does the Sysmon reader now see everything? | `Sysmon read errors` is 0, and `Sysmon events read` matches a `Get-WinEvent` count for the same period | Read `First Sysmon errors` in the summary |
 | Do Kernel-Network's connect events include failed connections? | Compare with a connection to a closed port | Document it, because `network_connect` would then mean "attempted" |
 | Does LSASS access appear with `vm_read`? | Atomic T1003.001 in step 2.3 gives a `process_access` event | Use the project-specific Sysmon config from PLANNING.md Section 9 |
 | Do event 12, the Close filter and the network filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |

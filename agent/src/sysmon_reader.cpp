@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <exception>
+#include <iostream>
 #include <list>
 #include <optional>
 #include <stdexcept>
@@ -43,6 +45,8 @@ constexpr DWORD kPollMs = 200;
 // table when its Sysmon event is read. Longer than the ETW flush timer.
 constexpr ULONGLONG kHoldMs = 2000;
 constexpr size_t kMaxHeld = 10000;
+
+constexpr size_t kMaxErrorsKept = 5;
 
 // One render context covers every event. A field an event doesn't have comes back as
 // EvtVarTypeNull, so the positions don't depend on the Sysmon schema version.
@@ -93,6 +97,19 @@ struct EvtCloser {
     }
 };
 using EvtPtr = std::unique_ptr<void, EvtCloser>;
+
+// "EvtNext failed, error 5: Access is denied."
+std::string describe_error(const char* action, DWORD code) {
+    std::string message = std::string(action) + " failed, error " + std::to_string(code);
+
+    char system_text[256] = {};
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0,
+                   system_text, sizeof(system_text), nullptr);
+    std::string detail = system_text;
+    while (!detail.empty() && (detail.back() == '\r' || detail.back() == '\n')) detail.pop_back();
+    if (!detail.empty()) message += ": " + detail;
+    return message;
+}
 
 std::wstring text_of(const EVT_VARIANT& value) {
     if (value.Type == EvtVarTypeString && value.StringVal) return value.StringVal;
@@ -236,18 +253,36 @@ struct SysmonReader::Impl {
         for (;;) {
             const DWORD wait = WaitForMultipleObjects(2, handles, FALSE, kPollMs);
             if (wait != WAIT_TIMEOUT && wait != WAIT_OBJECT_0 + 1) break;
-            // Reset before reading: an event arriving during the read signals again.
-            ResetEvent(signal_event);
-            read_available();
+            // A timeout only releases held events, unless a lost subscription needs replacing.
+            if (wait == WAIT_OBJECT_0 + 1 || !subscription) {
+                // Reset before reading: an event arriving during the read signals again.
+                ResetEvent(signal_event);
+                read_available();
+            }
             release_held(false);
         }
         read_available();
         release_held(true);
     }
 
+    void record_error(const std::string& message) {
+        ++counters.sysmon_errors;
+        for (SysmonError& known : errors) {
+            if (known.message == message) {
+                ++known.count;
+                return;
+            }
+        }
+        if (errors.size() < kMaxErrorsKept) {
+            errors.push_back({message, 1});
+            std::cerr << "Sysmon error: " << message << "\n";
+        }
+    }
+
     void read_available() {
         if (!subscription) {
             subscribe();
+            if (!subscription) record_error(describe_error("EvtSubscribe", GetLastError()));
             return;
         }
         for (;;) {
@@ -255,10 +290,13 @@ struct SysmonReader::Impl {
             DWORD returned = 0;
             if (!EvtNext(subscription.get(), kBatchSize, events, kNextTimeoutMs, 0, &returned)) {
                 const DWORD error = GetLastError();
-                if (error != ERROR_NO_MORE_ITEMS && error != ERROR_TIMEOUT) {
+                // An empty subscription can answer ERROR_INVALID_OPERATION as well as
+                // ERROR_NO_MORE_ITEMS. Neither means anything went wrong.
+                if (error != ERROR_NO_MORE_ITEMS && error != ERROR_TIMEOUT &&
+                    error != ERROR_INVALID_OPERATION) {
                     // The subscription fell behind or the service restarted. Anything
                     // missed is gone, so this is counted and shown in the summary.
-                    ++counters.sysmon_errors;
+                    record_error(describe_error("EvtNext", error));
                     subscribe();
                 }
                 return;
@@ -266,9 +304,11 @@ struct SysmonReader::Impl {
             for (DWORD i = 0; i < returned; ++i) {
                 const EvtPtr event(events[i]);
                 try {
-                    handle_event(event.get());
+                    handle_event(event.get());  // one bad event costs one event
+                } catch (const std::exception& error) {
+                    record_error(error.what());
                 } catch (...) {
-                    ++counters.sysmon_errors;  // one bad event costs one event
+                    record_error("unknown error while reading an event");
                 }
             }
         }
@@ -280,13 +320,14 @@ struct SysmonReader::Impl {
         const DWORD size = static_cast<DWORD>(render_buffer.size());
         if (!EvtRender(render_context.get(), event, EvtRenderEventValues, size,
                        render_buffer.data(), &used, &property_count)) {
-            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-                throw std::runtime_error("EvtRender failed");
+            const DWORD error = GetLastError();
+            if (error != ERROR_INSUFFICIENT_BUFFER) {
+                throw std::runtime_error(describe_error("EvtRender", error));
             }
             render_buffer.resize(used);
             if (!EvtRender(render_context.get(), event, EvtRenderEventValues, used,
                            render_buffer.data(), &used, &property_count)) {
-                throw std::runtime_error("EvtRender failed");
+                throw std::runtime_error(describe_error("EvtRender", GetLastError()));
             }
         }
         if (property_count != kFieldCount) throw std::runtime_error("unexpected field count");
@@ -472,6 +513,7 @@ struct SysmonReader::Impl {
     std::vector<BYTE> render_buffer = std::vector<BYTE>(64 * 1024);
     std::list<Held> held_events;
     std::unordered_map<std::wstring, std::optional<std::wstring>> sid_cache;
+    std::vector<SysmonError> errors;
     std::thread thread;
 };
 
@@ -487,6 +529,10 @@ void SysmonReader::start() {
 
 void SysmonReader::stop() {
     impl_->stop();
+}
+
+const std::vector<SysmonError>& SysmonReader::errors() const {
+    return impl_->errors;
 }
 
 }  // namespace tp

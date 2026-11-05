@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "agent_event.h"
 #include "etw_session.h"
@@ -149,6 +150,15 @@ void print_summary(const tp::Counters& counters, const std::optional<tp::Session
     print_coverage(L"Started after agent:  ", counters.registry_resolved_after.load(),
                    counters.registry_after.load());
     std::wcout << std::endl;
+}
+
+void print_sysmon_errors(const std::vector<tp::SysmonError>& errors) {
+    if (errors.empty()) return;
+    std::wcout << L"\nFirst Sysmon errors:\n";
+    for (const tp::SysmonError& error : errors) {
+        std::wcout << L"  " << error.count << L"x " << tp::to_wide(error.message) << L"\n";
+    }
+    std::wcout << std::flush;
 }
 
 }  // namespace
@@ -307,6 +317,7 @@ int wmain(int argc, wchar_t** argv) {
     tp::stop_session_by_name();
 
     print_summary(counters, stats, use_sysmon);
+    if (sysmon) print_sysmon_errors(sysmon->errors());
     SetEvent(g_shutdown_done);
 
     if (!etw_error.empty()) {

@@ -9,11 +9,18 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "agent_event.h"
 #include "process_table.h"
 
 namespace tp {
+
+struct SysmonError {
+    std::string message;
+    uint64_t count = 0;
+};
 
 class SysmonReader {
 public:
@@ -26,6 +33,9 @@ public:
 
     void start();
     void stop();  // reads what has arrived and hands over held events; safe to call twice
+
+    // The first few different errors and how often each happened. Call after stop().
+    const std::vector<SysmonError>& errors() const;
 
 private:
     struct Impl;
