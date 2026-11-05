@@ -120,7 +120,15 @@ Results of the first complete VM run, with event-driven watching:
 | `validate_events.py` on `fim.jsonl` | 0 invalid |
 | A second `watch` after the test | `Changes reported: 0`, so the test undid everything and the baseline still matched |
 
-**Step 2.2 is verified for event-driven watching.** The 60-second compare has passed in WSL tests only: its `--poll-only` VM result has not been recorded yet.
+Results of the run with `--poll-only` and `vm_test_fim.ps1 -Quick -HoldSeconds 70`:
+
+| Summary line | Result |
+|---|---|
+| `Changes reported` | 2, the value being added and then removed |
+| `Notifications` | 0, so the 60-second compare found both |
+| `Full compares` | 3 |
+
+**Step 2.2 is verified,** for event-driven watching and for the 60-second backup.
 
 ## Limits
 
