@@ -127,6 +127,7 @@ Results of the run with `--poll-only` and `vm_test_fim.ps1 -Quick -HoldSeconds 7
 | `Changes reported` | 2, the value being added and then removed |
 | `Notifications` | 0, so the 60-second compare found both |
 | `Full compares` | 3 |
+| `check_fim_run.py --poll-only` | 2 of 2 checks passed: the HKCU Run value was added and removed once each, and no event claimed a writer |
 
 **Step 2.2 is verified,** for event-driven watching and for the 60-second backup.
 

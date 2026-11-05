@@ -368,7 +368,7 @@ Results of the fourth VM run, with the reader fixed:
 
 File coverage depends on what Windows is doing during a run. The third run's gaps came from Windows Update (`MpSigStub`, `wuaucltcore`), svchost services and OneDrive, not from the test, so no resolver change is needed. In the fourth run the gaps were svchost (8) and OneDrive (3). Its registry gaps were PowerShell (5), conhost (2) and ping (1).
 
-**Step 2.2 (FIM) is verified.** `check_fim_run.py` passed 12 of 12 checks, and FIM found the change 0.0 seconds after Sysmon. With `--poll-only`, the 60-second compare reported the 2 changes with no notifications. See [fim/README.md](fim/README.md).
+**Step 2.2 (FIM) is verified.** `check_fim_run.py` passed 12 of 12 checks, and FIM found the change 0.0 seconds after Sysmon. With `--poll-only`, the 60-second compare reported the 2 changes with no notifications, and `check_fim_run.py` passed 2 of 2 checks. See [fim/README.md](fim/README.md).
 
 Settled in the VM:
 
