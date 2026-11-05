@@ -85,7 +85,7 @@ ReadDirectoryChangesW ----+--> rescan --> compare --> fim_change --> fim.jsonl
 
 ## Test it
 
-**In WSL,** for everything except `windows_watch.py` and `main.py`:
+**In WSL,** for everything except the Windows API calls in `windows_watch.py` and `main.py`. The tests also check that file's table of Windows constants, which is defined there because pywin32's `win32con` lacks some of them:
 
 ```bash
 cd agent && uv run pytest

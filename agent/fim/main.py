@@ -54,7 +54,7 @@ def watch(folder: Path, out: Path, poll_only: bool) -> int:
     from events import EventWriter
     from monitor import FULL_COMPARE_SECONDS, Monitor, run
     from targets import REGISTRY_TARGETS, folder_targets
-    from windows_watch import WindowsSource
+    from windows_watch import WAIT_OBJECT_0, WindowsSource
 
     try:
         baseline = load_baseline(folder)
@@ -78,7 +78,7 @@ def watch(folder: Path, out: Path, poll_only: bool) -> int:
     print(f"ThreatPulse FIM running, comparing {mode}. Writing to {out}\nPress Ctrl+C to stop.")
 
     def should_stop() -> bool:
-        return win32event.WaitForSingleObject(stop_event, 0) == win32event.WAIT_OBJECT_0
+        return win32event.WaitForSingleObject(stop_event, 0) == WAIT_OBJECT_0
 
     try:
         run(monitor, source, should_stop)
