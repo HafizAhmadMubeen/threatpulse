@@ -32,11 +32,11 @@ export function AlertList() {
                 <tbody>
                   {[...items].sort(newestFirst).map((alert) => (
                     <tr key={alert.alert_id}>
-                      <td><Link to={`/alerts/${encodeURIComponent(alert.alert_id)}`}>{alert.alert_id}</Link></td>
+                      <td className="nowrap"><Link to={`/alerts/${encodeURIComponent(alert.alert_id)}`}>{alert.alert_id}</Link></td>
                       <td className="nowrap">{formatTime(alert.ts)}</td>
                       <td>{alert.object.zone}</td>
                       <td>{alert.layer}</td>
-                      <td><RiskScore score={alert.risk_score} /></td>
+                      <td className="nowrap"><RiskScore alert={alert} /></td>
                       <td>{alert.rule_id}</td>
                       <td><Telemetry value={alert.subject.image} /></td>
                     </tr>

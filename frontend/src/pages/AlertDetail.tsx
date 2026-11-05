@@ -28,7 +28,7 @@ function AlertFacts({ alert }: { alert: Alert }) {
       <dt>Layer</dt>
       <dd>{alert.layer}</dd>
       <dt>Risk score</dt>
-      <dd><RiskScore score={alert.risk_score} /></dd>
+      <dd><RiskScore alert={alert} /></dd>
       <dt>Rule</dt>
       <dd>{alert.rule_id}</dd>
       <dt>Techniques</dt>

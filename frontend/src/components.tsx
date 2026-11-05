@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Loaded } from './hooks'
-import type { Action, ActionStatus } from './types'
+import type { Action, ActionStatus, Alert } from './types'
 
 export function formatTime(ts: string | null | undefined): string {
   return ts ? `${ts.slice(0, 19).replace('T', ' ')} UTC` : '—'
@@ -14,11 +14,44 @@ export function Telemetry({ value }: { value: string | number | null | undefined
   return <code className="telemetry">{value}</code>
 }
 
-/** 0 is a real score, so the check must be for null and not for falsy. */
-export function RiskScore({ score }: { score: number | null }) {
-  if (score === null) return <span className="muted">not scored</span>
-  const level = score >= 0.8 ? 'risk-high' : score >= 0.5 ? 'risk-medium' : 'risk-low'
-  return <span className={`risk ${level}`}>{score.toFixed(2)}</span>
+export type Severity = 'Confirmed' | 'High' | 'Medium' | 'Low' | 'Not scored'
+
+/**
+ * What an analyst should read first. For display only: enforcement comes from the policy
+ * engine and never from this.
+ *
+ * A hash match or a changed protected item is a fact, whatever the behaviour model thinks
+ * of the process around it, so it ranks above any score. The EICAR sample is the reason:
+ * a confirmed match with a risk score of 0.12 must not look safe.
+ */
+export function severityOf(alert: Pick<Alert, 'layer' | 'risk_score' | 'object'>): Severity {
+  if (alert.layer === 'signature') return 'Confirmed'
+  if (alert.layer === 'fim' && alert.object.zone !== 'none') return 'Confirmed'
+  const score = alert.risk_score
+  if (score === null) return 'Not scored'  // 0 is a real score, so this is not a falsy check
+  if (score >= 0.8) return 'High'
+  return score >= 0.5 ? 'Medium' : 'Low'
+}
+
+const SEVERITY_CLASSES: Record<Severity, string> = {
+  Confirmed: 'severity-confirmed',
+  High: 'severity-high',
+  Medium: 'severity-medium',
+  Low: 'severity-low',
+  'Not scored': 'severity-none',
+}
+
+/** The score stays uncoloured, so the badge alone carries the meaning. */
+export function RiskScore({ alert }: { alert: Pick<Alert, 'layer' | 'risk_score' | 'object'> }) {
+  const severity = severityOf(alert)
+  const score = alert.risk_score
+  return (
+    <span className="risk">
+      {score !== null && <span className="score">{score.toFixed(2)}</span>}
+      {score === null && severity !== 'Not scored' && <span className="muted">not scored</span>}
+      <span className={`badge ${SEVERITY_CLASSES[severity]}`}>{severity}</span>
+    </span>
+  )
 }
 
 const STATUS_LABELS: Record<ActionStatus, string> = {

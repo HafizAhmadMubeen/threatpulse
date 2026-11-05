@@ -107,10 +107,8 @@ tbody tr + tr td, tbody tr + tr th { border-top: 1px solid var(--border); }
 
 .report-text { overflow-wrap: anywhere; }
 
-.risk { font-weight: 600; font-variant-numeric: tabular-nums; }
-.risk-high { color: var(--red); }
-.risk-medium { color: var(--amber); }
-.risk-low { color: var(--green); }
+.risk { display: inline-flex; align-items: center; gap: 8px; }
+.score { font-variant-numeric: tabular-nums; }
 
 .badge {
   display: inline-block;
@@ -124,6 +122,13 @@ tbody tr + tr td, tbody tr + tr th { border-top: 1px solid var(--border); }
 .badge-approved { background: var(--green-bg); color: var(--green); }
 .badge-failed, .badge-rejected { background: var(--red-bg); color: var(--red); }
 .badge-awaiting_approval, .badge-pending { background: var(--amber-bg); color: var(--amber); }
+
+/* Severity, the only thing that colours a risk score. Confirmed is the one solid fill. */
+.severity-confirmed { background: var(--red); color: var(--bg); font-weight: 600; }
+.severity-high { background: var(--red-bg); color: var(--red); }
+.severity-medium { background: var(--amber-bg); color: var(--amber); }
+.severity-low { background: var(--green-bg); color: var(--green); }
+.severity-none { background: var(--grey-bg); color: var(--muted); }
 
 .facts {
   display: grid;

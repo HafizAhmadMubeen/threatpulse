@@ -26,7 +26,7 @@ function requestRows(decisions: Decision[], alerts: Alert[]): Row[] {
 function Context({ row }: { row: Row }) {
   return (
     <>
-      <td><Link to={`/alerts/${encodeURIComponent(row.decision.alert_id)}`}>{row.decision.alert_id}</Link></td>
+      <td className="nowrap"><Link to={`/alerts/${encodeURIComponent(row.decision.alert_id)}`}>{row.decision.alert_id}</Link></td>
       <td>{row.action.action}</td>
       <td><Telemetry value={row.alert?.subject.image} /></td>
     </>

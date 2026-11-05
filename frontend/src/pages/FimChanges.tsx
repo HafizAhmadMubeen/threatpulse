@@ -62,7 +62,7 @@ export function FimChanges() {
                       <td>{change.change.kind}</td>
                       <td><Telemetry value={change.change.old_value} /></td>
                       <td><Telemetry value={change.change.new_value} /></td>
-                      <td>
+                      <td className="nowrap">
                         {change.alert_id ? (
                           <Link to={`/alerts/${encodeURIComponent(change.alert_id)}`}>{change.alert_id}</Link>
                         ) : (
