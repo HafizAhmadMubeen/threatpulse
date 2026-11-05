@@ -1,0 +1,43 @@
+{
+  "alert_id": "a-0003",
+  "ts": "2026-11-05T09:32:01.100Z",
+  "layer": "rule",
+  "rule_id": "R-T1003-001",
+  "technique_ids": [
+    "T1003.001"
+  ],
+  "risk_score": 0.88,
+  "event_type": "process_access",
+  "subject": {
+    "pid": 5204,
+    "image": "C:\\AtomicRedTeam\\atomics\\T1003.001\\bin\\procdump.exe",
+    "signed": true,
+    "signer": "Microsoft Corporation",
+    "trusted_path": false,
+    "ancestors": [
+      {
+        "pid": 5188,
+        "image": "C:\\Windows\\System32\\cmd.exe"
+      },
+      {
+        "pid": 4100,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
+    ]
+  },
+  "object": {
+    "zone": "lsass",
+    "path": "C:\\Windows\\System32\\lsass.exe",
+    "registry_key": null,
+    "access": [
+      "vm_read",
+      "query_information",
+      "query_limited_information",
+      "read_control"
+    ],
+    "file_sha256": null
+  },
+  "evidence_event_ids": [
+    "a-0001"
+  ]
+}

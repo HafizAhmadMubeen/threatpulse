@@ -1,0 +1,30 @@
+{
+  "decision_id": "d-0004",
+  "alert_id": "a-0004",
+  "ts": "2026-11-05T09:33:01.600Z",
+  "policy_rules": [
+    "P2-persistence-change",
+    "P2b-persistence-origin"
+  ],
+  "actions": [
+    {
+      "action": "restore",
+      "automatic": true,
+      "status": "executed",
+      "executed_at": "2026-11-05T09:33:01.740Z"
+    },
+    {
+      "action": "suspend",
+      "automatic": true,
+      "status": "skipped",
+      "executed_at": null
+    }
+  ],
+  "attributes": {
+    "zone": "persistence",
+    "signed": true,
+    "trusted_path": true,
+    "risk_score": 0.91,
+    "change_approved": false
+  }
+}

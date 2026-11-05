@@ -1,0 +1,24 @@
+{
+  "decision_id": "d-0006",
+  "alert_id": "a-0006",
+  "ts": "2026-11-05T09:35:01.100Z",
+  "policy_rules": [
+    "P3-ransomware"
+  ],
+  "actions": [
+    {
+      "action": "suspend",
+      "automatic": true,
+      "status": "executed",
+      "executed_at": "2026-11-05T09:35:01.150Z",
+      "reviewed_by": "lab-analyst"
+    }
+  ],
+  "attributes": {
+    "zone": "documents",
+    "signed": true,
+    "trusted_path": true,
+    "risk_score": 0.86,
+    "already_suspended": false
+  }
+}

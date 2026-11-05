@@ -1,0 +1,222 @@
+[
+  {
+    "decision_id": "d-0001",
+    "alert_id": "a-0001",
+    "ts": "2026-11-05T09:30:13.000Z",
+    "policy_rules": [
+      "P6-delete-request"
+    ],
+    "actions": [
+      {
+        "action": "request_delete",
+        "automatic": false,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:30:48.200Z",
+        "reviewed_by": "lab-analyst",
+        "reviewed_at": "2026-11-05T09:30:48.000Z"
+      }
+    ],
+    "attributes": {
+      "zone": "none",
+      "signed": true,
+      "trusted_path": true,
+      "risk_score": 0.12
+    }
+  },
+  {
+    "decision_id": "d-0002",
+    "alert_id": "a-0002",
+    "ts": "2026-11-05T09:31:01.600Z",
+    "policy_rules": [],
+    "actions": [
+      {
+        "action": "alert_only",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:31:01.600Z"
+      }
+    ],
+    "attributes": {
+      "zone": "none",
+      "signed": false,
+      "trusted_path": false,
+      "risk_score": 0.22
+    }
+  },
+  {
+    "decision_id": "d-0003",
+    "alert_id": "a-0003",
+    "ts": "2026-11-05T09:32:01.200Z",
+    "policy_rules": [
+      "P1-lsass-read"
+    ],
+    "actions": [
+      {
+        "action": "alert_only",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:32:01.200Z"
+      }
+    ],
+    "attributes": {
+      "zone": "lsass",
+      "signed": true,
+      "trusted_path": false,
+      "risk_score": 0.88,
+      "lsass_mode": "learning",
+      "in_lsass_allowlist": false
+    }
+  },
+  {
+    "decision_id": "d-0004",
+    "alert_id": "a-0004",
+    "ts": "2026-11-05T09:33:01.600Z",
+    "policy_rules": [
+      "P2-persistence-change",
+      "P2b-persistence-origin"
+    ],
+    "actions": [
+      {
+        "action": "restore",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:33:01.740Z"
+      },
+      {
+        "action": "suspend",
+        "automatic": true,
+        "status": "skipped",
+        "reason": "process already exited",
+        "executed_at": null
+      }
+    ],
+    "attributes": {
+      "zone": "persistence",
+      "signed": true,
+      "trusted_path": true,
+      "risk_score": 0.91,
+      "change_approved": false
+    }
+  },
+  {
+    "decision_id": "d-0005",
+    "alert_id": "a-0005",
+    "ts": "2026-11-05T09:34:01.100Z",
+    "policy_rules": [
+      "P2-persistence-change"
+    ],
+    "actions": [
+      {
+        "action": "restore",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:34:01.300Z"
+      }
+    ],
+    "attributes": {
+      "zone": "persistence",
+      "signed": false,
+      "trusted_path": false,
+      "risk_score": null,
+      "change_approved": false
+    }
+  },
+  {
+    "decision_id": "d-0006",
+    "alert_id": "a-0006",
+    "ts": "2026-11-05T09:35:01.100Z",
+    "policy_rules": [
+      "P3-ransomware"
+    ],
+    "actions": [
+      {
+        "action": "suspend",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:35:01.150Z"
+      }
+    ],
+    "attributes": {
+      "zone": "documents",
+      "signed": true,
+      "trusted_path": true,
+      "risk_score": 0.86,
+      "already_suspended": false
+    }
+  },
+  {
+    "decision_id": "d-0007",
+    "alert_id": "a-0007",
+    "ts": "2026-11-05T09:35:02.100Z",
+    "policy_rules": [
+      "P3-ransomware",
+      "P5-kill-request"
+    ],
+    "actions": [
+      {
+        "action": "suspend",
+        "automatic": true,
+        "status": "skipped",
+        "reason": "process already suspended",
+        "executed_at": null
+      },
+      {
+        "action": "request_kill",
+        "automatic": false,
+        "status": "awaiting_approval",
+        "executed_at": null
+      }
+    ],
+    "attributes": {
+      "zone": "documents",
+      "signed": true,
+      "trusted_path": true,
+      "risk_score": 0.97,
+      "already_suspended": true
+    }
+  },
+  {
+    "decision_id": "d-0008",
+    "alert_id": "a-0008",
+    "ts": "2026-11-05T09:36:01.300Z",
+    "policy_rules": [
+      "P4-exfil"
+    ],
+    "actions": [
+      {
+        "action": "block_network",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:36:01.550Z"
+      }
+    ],
+    "attributes": {
+      "zone": "network",
+      "signed": true,
+      "trusted_path": true,
+      "risk_score": 0.84
+    }
+  },
+  {
+    "decision_id": "d-0009",
+    "alert_id": "a-0009",
+    "ts": "2026-11-05T09:37:01.500Z",
+    "policy_rules": [
+      "P4-exfil"
+    ],
+    "actions": [
+      {
+        "action": "block_network",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:37:01.720Z"
+      }
+    ],
+    "attributes": {
+      "zone": "network",
+      "signed": false,
+      "trusted_path": false,
+      "risk_score": 0.87
+    }
+  }
+]

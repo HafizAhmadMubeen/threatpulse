@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatPulse Alert",
+  "description": "Produced by the detection layers for the policy engine and backend (PLANNING.md Section 5.2). A subject with pid 0 means no known process.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "alert_id",
+    "ts",
+    "layer",
+    "rule_id",
+    "technique_ids",
+    "risk_score",
+    "event_type",
+    "subject",
+    "object",
+    "evidence_event_ids"
+  ],
+  "properties": {
+    "alert_id": {
+      "description": "a-<counter, at least 4 digits>.",
+      "type": "string",
+      "pattern": "^a-[0-9]{4,}$"
+    },
+    "ts": {
+      "description": "UTC ISO 8601. Milliseconds are optional.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{3})?Z$"
+    },
+    "layer": { "enum": ["signature", "heuristic", "fim", "rule", "ml"] },
+    "rule_id": {
+      "description": "The rule that fired. ML-TRIAGE for the ml layer and SIG-<name> for the signature layer.",
+      "type": "string",
+      "minLength": 1
+    },
+    "technique_ids": {
+      "description": "ATT&CK technique IDs. Empty when no technique applies, as with EICAR.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$" },
+      "uniqueItems": true
+    },
+    "risk_score": {
+      "description": "ML score of the subject's process tree, from score_process. Null means not scored, which never matches risk_score_gte.",
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "event_type": {
+      "description": "Same values as Event.event_type.",
+      "enum": [
+        "process_start",
+        "process_stop",
+        "process_access",
+        "file_create",
+        "file_write",
+        "file_rename",
+        "file_delete",
+        "registry_set",
+        "registry_delete",
+        "network_connect",
+        "fim_change"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "image", "signed", "signer", "trusted_path", "ancestors"],
+      "properties": {
+        "pid": {
+          "description": "0 when no process is known, for example a FIM change with no writer or a file scan.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "image": { "type": "string", "minLength": 1 },
+        "signed": { "type": "boolean" },
+        "signer": { "type": ["string", "null"] },
+        "trusted_path": { "type": "boolean" },
+        "ancestors": {
+          "description": "Nearest parent first.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pid", "image"],
+            "properties": {
+              "pid": { "type": "integer", "minimum": 0 },
+              "image": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zone", "path", "registry_key", "access", "file_sha256"],
+      "properties": {
+        "zone": { "enum": ["documents", "persistence", "lsass", "network", "none"] },
+        "path": { "type": ["string", "null"] },
+        "registry_key": { "type": ["string", "null"] },
+        "access": {
+          "description": "Decoded rights such as vm_read, from Event.target.access_rights.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "file_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "evidence_event_ids": {
+      "description": "Event IDs behind this alert. Can be empty only when no process is known.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^e-[0-9]{8}T[0-9]{6}-[0-9]{6,}$" },
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["subject"],
+        "properties": {
+          "subject": { "required": ["pid"], "properties": { "pid": { "const": 0 } } }
+        }
+      },
+      "then": {
+        "properties": {
+          "risk_score": { "type": "null" },
+          "subject": {
+            "properties": {
+              "image": { "const": "unknown" },
+              "signed": { "const": false },
+              "signer": { "type": "null" },
+              "trusted_path": { "const": false },
+              "ancestors": { "maxItems": 0 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": { "evidence_event_ids": { "minItems": 1 } }
+      }
+    },
+    {
+      "if": {
+        "required": ["layer"],
+        "properties": { "layer": { "const": "ml" } }
+      },
+      "then": {
+        "properties": { "rule_id": { "const": "ML-TRIAGE" } }
+      }
+    },
+    {
+      "if": {
+        "required": ["layer"],
+        "properties": { "layer": { "const": "signature" } }
+      },
+      "then": {
+        "properties": { "rule_id": { "pattern": "^SIG-.+$" } }
+      }
+    }
+  ]
+}

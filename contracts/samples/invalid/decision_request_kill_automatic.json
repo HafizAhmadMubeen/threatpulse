@@ -1,0 +1,31 @@
+{
+  "decision_id": "d-0007",
+  "alert_id": "a-0007",
+  "ts": "2026-11-05T09:35:02.100Z",
+  "policy_rules": [
+    "P3-ransomware",
+    "P5-kill-request"
+  ],
+  "actions": [
+    {
+      "action": "suspend",
+      "automatic": true,
+      "status": "skipped",
+      "reason": "process already suspended",
+      "executed_at": null
+    },
+    {
+      "action": "request_kill",
+      "automatic": true,
+      "status": "awaiting_approval",
+      "executed_at": null
+    }
+  ],
+  "attributes": {
+    "zone": "documents",
+    "signed": true,
+    "trusted_path": true,
+    "risk_score": 0.97,
+    "already_suspended": true
+  }
+}

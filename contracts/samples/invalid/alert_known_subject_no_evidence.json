@@ -1,0 +1,30 @@
+{
+  "alert_id": "a-0001",
+  "ts": "2026-11-05T09:30:12.900Z",
+  "layer": "signature",
+  "rule_id": "SIG-EICAR",
+  "technique_ids": [],
+  "risk_score": 0.12,
+  "event_type": "file_create",
+  "subject": {
+    "pid": 4100,
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "signed": true,
+    "signer": "Microsoft Windows",
+    "trusted_path": true,
+    "ancestors": [
+      {
+        "pid": 3120,
+        "image": "C:\\Windows\\explorer.exe"
+      }
+    ]
+  },
+  "object": {
+    "zone": "none",
+    "path": "C:\\Users\\lab\\Desktop\\eicar.com",
+    "registry_key": null,
+    "access": [],
+    "file_sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+  },
+  "evidence_event_ids": []
+}

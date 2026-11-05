@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatPulse Decision",
+  "description": "Produced by the policy engine for enforcement and the dashboard (PLANNING.md Section 5.3). One decision can hold several actions, each with its own status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision_id", "alert_id", "ts", "policy_rules", "actions", "attributes"],
+  "properties": {
+    "decision_id": {
+      "description": "d-<same counter as the alert>.",
+      "type": "string",
+      "pattern": "^d-[0-9]{4,}$"
+    },
+    "alert_id": { "type": "string", "pattern": "^a-[0-9]{4,}$" },
+    "ts": {
+      "description": "When the decision was made. UTC ISO 8601, milliseconds optional.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{3})?Z$"
+    },
+    "policy_rules": {
+      "description": "IDs of the rules that fired. Empty when only the default applied.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "attributes": {
+      "description": "The attributes behind this decision. Rule-specific ones such as lsass_mode or already_suspended sit beside the required ones.",
+      "type": "object",
+      "required": ["zone", "signed", "trusted_path", "risk_score"],
+      "properties": {
+        "zone": { "enum": ["documents", "persistence", "lsass", "network", "none"] },
+        "signed": { "type": "boolean" },
+        "trusted_path": { "type": "boolean" },
+        "risk_score": {
+          "description": "Null means not scored.",
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{3})?Z$"
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "automatic", "status", "executed_at"],
+      "properties": {
+        "action": {
+          "enum": [
+            "alert_only",
+            "suspend",
+            "block_network",
+            "restore",
+            "request_kill",
+            "request_delete"
+          ]
+        },
+        "automatic": { "type": "boolean" },
+        "status": {
+          "enum": [
+            "executed",
+            "failed",
+            "skipped",
+            "awaiting_approval",
+            "approved",
+            "rejected"
+          ]
+        },
+        "reason": {
+          "description": "Required when the status is skipped or failed.",
+          "type": "string",
+          "minLength": 1
+        },
+        "executed_at": {
+          "description": "When the action ran. Null if it has not run. A failed action can give the time of the attempt.",
+          "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "reviewed_by": {
+          "description": "The analyst who approved or rejected. Only on a request_kill or request_delete that has been reviewed, and kept after it runs.",
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewed_at": {
+          "description": "When it was approved or rejected. Same rule as reviewed_by.",
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["action"],
+            "properties": { "action": { "enum": ["request_kill", "request_delete"] } }
+          },
+          "then": {
+            "properties": {
+              "automatic": { "const": false },
+              "status": {
+                "enum": ["awaiting_approval", "approved", "rejected", "executed", "failed"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "automatic": { "const": true },
+              "status": { "enum": ["executed", "failed", "skipped"] }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["status"],
+            "properties": { "status": { "enum": ["skipped", "failed"] } }
+          },
+          "then": { "required": ["reason"] }
+        },
+        {
+          "if": {
+            "required": ["status"],
+            "properties": { "status": { "const": "executed" } }
+          },
+          "then": {
+            "properties": { "executed_at": { "type": "string" } }
+          }
+        },
+        {
+          "if": {
+            "required": ["status"],
+            "properties": {
+              "status": { "enum": ["skipped", "awaiting_approval", "approved", "rejected"] }
+            }
+          },
+          "then": {
+            "properties": { "executed_at": { "type": "null" } }
+          }
+        },
+        {
+          "if": {
+            "required": ["action", "status"],
+            "properties": {
+              "action": { "enum": ["request_kill", "request_delete"] },
+              "status": { "enum": ["approved", "rejected", "executed", "failed"] }
+            }
+          },
+          "then": { "required": ["reviewed_by", "reviewed_at"] },
+          "else": {
+            "not": {
+              "anyOf": [{ "required": ["reviewed_by"] }, { "required": ["reviewed_at"] }]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

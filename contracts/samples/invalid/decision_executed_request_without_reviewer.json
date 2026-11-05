@@ -1,0 +1,23 @@
+{
+  "decision_id": "d-0001",
+  "alert_id": "a-0001",
+  "ts": "2026-11-05T09:30:13.000Z",
+  "policy_rules": [
+    "P6-delete-request"
+  ],
+  "actions": [
+    {
+      "action": "request_delete",
+      "automatic": false,
+      "status": "executed",
+      "executed_at": "2026-11-05T09:30:48.200Z",
+      "reviewed_at": "2026-11-05T09:30:48.000Z"
+    }
+  ],
+  "attributes": {
+    "zone": "none",
+    "signed": true,
+    "trusted_path": true,
+    "risk_score": 0.12
+  }
+}
