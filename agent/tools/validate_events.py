@@ -41,7 +41,7 @@ def find_line_problems(line: str, validator: Draft202012Validator) -> tuple[dict
 
 def validate_file(events_path: Path, validator: Draft202012Validator, max_errors: int) -> int:
     """Print a report and return the number of invalid lines."""
-    event_types: Counter[str] = Counter()
+    event_types: Counter[tuple[str, str]] = Counter()
     seen_ids: dict[str, int] = {}
     total = 0
     invalid = 0
@@ -54,7 +54,7 @@ def validate_file(events_path: Path, validator: Draft202012Validator, max_errors
             event, problems = find_line_problems(line, validator)
 
             if isinstance(event, dict):
-                event_types[str(event.get("event_type"))] += 1
+                event_types[(str(event.get("source")), str(event.get("event_type")))] += 1
                 event_id = event.get("event_id")
                 if isinstance(event_id, str):
                     if event_id in seen_ids:
@@ -72,8 +72,8 @@ def validate_file(events_path: Path, validator: Draft202012Validator, max_errors
         print(f"... {invalid - max_errors} more invalid lines not shown")
 
     print(f"\n{total} events, {invalid} invalid")
-    for event_type, count in sorted(event_types.items()):
-        print(f"  {event_type}: {count}")
+    for (source, event_type), count in sorted(event_types.items()):
+        print(f"  {source} {event_type}: {count}")
 
     if total == 0:
         print("The file has no events.")

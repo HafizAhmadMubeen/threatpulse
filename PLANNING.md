@@ -145,7 +145,7 @@ These are agreed **in Phase 0** and stored in `contracts/` as JSON Schema plus s
   "ts": "2026-11-04T12:00:00.123Z",
   "host": "lab-vm-01",
   "source": "etw | sysmon | fim",
-  "event_type": "process_start | process_stop | process_access | file_create | file_write | file_rename | file_delete | registry_set | network_connect | fim_change",
+  "event_type": "process_start | process_stop | process_access | file_create | file_write | file_rename | file_delete | registry_set | registry_delete | network_connect | fim_change",
   "pid": 4321,
   "ppid": 1200,
   "process": {
@@ -162,6 +162,7 @@ These are agreed **in Phase 0** and stored in `contracts/` as JSON Schema plus s
     "registry_key": null,
     "pid": null,
     "access_mask": null,
+    "access_rights": null,
     "dest_ip": null,
     "dest_port": null
   }
@@ -176,7 +177,13 @@ The schema is `contracts/schemas/event.schema.json`.
 - `process.cmdline`, `process.user`, `process.sha256` and `process.signer` can be null when the value could not be read.
 - `process.signed` is never null. It is true only for a verified signature, and a failed check gives `false`.
 - `ppid` is 0 when the parent is unknown.
-- Every `target` field can be null, except that `registry_set` requires `registry_key`.
+- Every `target` field can be null, except that `registry_set` and `registry_delete` require `registry_key`.
+- `registry_delete` means a key or value was deleted. It comes from Sysmon Event ID 12, because deleting a Run key must not look like adding one. Sysmon Event ID 13 gives `registry_set`.
+- `process_access` is one process opening another. `pid` and `process` are the process doing it, and `target.pid` and `target.path` are the process it opened.
+- `target.access_mask` is the raw hex string, such as `"0x1010"`. `target.access_rights` is an optional array of the decoded rights, such as `["vm_read", "query_limited_information"]`. It is set only for `process_access`.
+- `network_connect` is an outbound connection. ETW events are TCP only, while Sysmon Event ID 3 covers only what the Sysmon config includes.
+- One action can appear twice, once per `source`. See "Event sources for ML" in Section 10.
+- `events.jsonl` is not strictly in time order, because ETW and Sysmon arrive on separate threads. Consumers must sort by `ts`.
 
 ### 5.2 Alert (detection layers → policy engine and backend)
 
@@ -481,6 +488,7 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Free-tier LLM limits or outage | Switch provider with one setting. Fall back to a local model (Ollama on the lab workstation's GPU) |
 | VM evaluation licence expires (90 days) | Rebuild from the ISO. Keep setup steps scripted in `docs/lab-setup.md` |
 | A member falls behind | See "Rebalancing" in ROADMAP.md. Simplify a layer, never remove it |
+| `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Verify with Atomic T1003.001 in step 2.3 | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM |
 
 ## 10. Decisions
 
@@ -492,6 +500,9 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | LSASS visibility | Sysmon Event ID 10 with `sysmon-modular`, learning → enforcing mode |
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
+| FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
+| Path coverage targets | 100% for the test or attack process and the documents zone (met: 127 of 127). At least 95% for all processes started after the agent (met: 97.9%). The remaining 3 writes are accepted |
+| Event sources for ML | Counts and rates use `source: etw` only, so one action is never counted twice. Sysmon events give zone signals, which may be used as features: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13). Detection rules may use either source |
 | Ransomware zone | Controlled Folder Access **and** own detector |
 | Persistence zone | Restore unapproved changes. Suspend only by risk score |
 | Logs out of VM | Export procedure, Section 3.2 |

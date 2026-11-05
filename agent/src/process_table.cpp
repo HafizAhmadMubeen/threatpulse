@@ -166,11 +166,13 @@ const ProcessInfo& ProcessTable::on_start(uint32_t pid, uint32_t ppid, std::wstr
         info.user = creator->account;
         info.sid = creator->sid;
     }
+    const std::lock_guard<std::mutex> lock(mutex_);
     return processes_[pid] = std::move(info);  // overwrites any entry from a reused pid
 }
 
 const ProcessInfo& ProcessTable::on_stop(uint32_t pid) {
     ProcessInfo& info = entry(pid, nullptr);
+    const std::lock_guard<std::mutex> lock(mutex_);
     info.exited_tick = GetTickCount64();
     return info;
 }
@@ -179,13 +181,23 @@ const ProcessInfo& ProcessTable::lookup(uint32_t pid, const ResolvedUser* event_
     return entry(pid, event_user);
 }
 
+std::optional<ProcessInfo> ProcessTable::snapshot(uint32_t pid) const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = processes_.find(pid);
+    if (found == processes_.end()) return std::nullopt;
+    return found->second;
+}
+
 ProcessInfo& ProcessTable::entry(uint32_t pid, const ResolvedUser* event_user) {
     auto found = processes_.find(pid);
     if (found == processes_.end()) {
-        found = processes_.emplace(pid, read_live(pid)).first;
+        ProcessInfo live = read_live(pid);  // outside the lock: this opens the process
+        const std::lock_guard<std::mutex> lock(mutex_);
+        found = processes_.emplace(pid, std::move(live)).first;
     }
     ProcessInfo& info = found->second;
     if (!info.user && event_user) {
+        const std::lock_guard<std::mutex> lock(mutex_);
         info.user = event_user->account;
         info.sid = event_user->sid;
     }
@@ -207,6 +219,7 @@ void ProcessTable::sweep() {
     if (now - last_sweep_tick_ < kSweepEveryMs) return;
     last_sweep_tick_ = now;
 
+    const std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = processes_.begin(); it != processes_.end();) {
         const ULONGLONG exited = it->second.exited_tick;
         if (exited != 0 && now - exited > kKeepExitedMs) {

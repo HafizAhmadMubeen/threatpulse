@@ -24,6 +24,7 @@
 #include "jsonl_writer.h"
 #include "path_utils.h"
 #include "process_table.h"
+#include "sysmon_reader.h"
 #include "text.h"
 
 namespace {
@@ -89,11 +90,12 @@ std::string make_run_id() {
 
 void print_usage() {
     std::wcout << L"Usage: threatpulse_agent [--out <file>] [--config <filters.json>]\n"
-               << L"                         [--no-close-events] [--rundown]\n"
+               << L"                         [--no-close-events] [--rundown] [--no-sysmon]\n"
                << L"  --out              output file (default " << kDefaultOut << L")\n"
                << L"  --config           filter file (default: filters.json next to the program)\n"
                << L"  --no-close-events  fallback if Close events cause ETW losses\n"
                << L"  --rundown          experiment: ask ETW to report what is already open\n"
+               << L"  --no-sysmon        run without Sysmon: no LSASS or full-key zone signals\n"
                << L"Stop with Ctrl+C.\n";
 }
 
@@ -110,7 +112,8 @@ void print_coverage(const wchar_t* label, uint64_t covered, uint64_t total) {
     std::wcout << text;
 }
 
-void print_summary(const tp::Counters& counters, const std::optional<tp::SessionStats>& stats) {
+void print_summary(const tp::Counters& counters, const std::optional<tp::SessionStats>& stats,
+                   bool sysmon_enabled) {
     std::wcout << L"\nEvents written:            " << counters.written.load()
                << L"\nDropped, own process:      " << counters.own_dropped.load()
                << L"\nDropped, noise filters:    " << counters.filtered.load()
@@ -125,6 +128,14 @@ void print_summary(const tp::Counters& counters, const std::optional<tp::Session
                    << L"\nLost by ETW, buffers:      " << stats->buffers_lost;
     } else {
         std::wcout << L"\nLost by ETW:               could not be read";
+    }
+    if (sysmon_enabled) {
+        std::wcout << L"\nSysmon events read:        " << counters.sysmon_read.load()
+                   << L"\nSysmon events skipped:     " << counters.sysmon_skipped.load()
+                   << L"\nSysmon, no process info:   " << counters.sysmon_no_process_details.load()
+                   << L"\nSysmon read errors:        " << counters.sysmon_errors.load();
+    } else {
+        std::wcout << L"\nSysmon:                    off";
     }
 
     std::wcout << L"\n\nFile writes with a path:";
@@ -146,6 +157,7 @@ int wmain(int argc, wchar_t** argv) {
     std::filesystem::path out_path = kDefaultOut;
     std::filesystem::path config_path = default_config_path();
     tp::SessionOptions session_options;
+    bool use_sysmon = true;
 
     for (int i = 1; i < argc; ++i) {
         const std::wstring argument = argv[i];
@@ -159,6 +171,10 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (argument == L"--rundown") {
             session_options.rundown = true;
+            continue;
+        }
+        if (argument == L"--no-sysmon") {
+            use_sysmon = false;
             continue;
         }
         if ((argument == L"--out" || argument == L"--config") && i + 1 < argc) {
@@ -229,7 +245,22 @@ int wmain(int argc, wchar_t** argv) {
         return kExitStartupFailed;
     }
 
+    // A failure stops the agent, so a recording can't silently lack zone signals.
+    std::unique_ptr<tp::SysmonReader> sysmon;
+    if (use_sysmon) {
+        try {
+            sysmon = std::make_unique<tp::SysmonReader>(
+                GetCurrentProcessId(), processes, counters,
+                [&writer](tp::PendingEvent&& event) { writer->push(std::move(event)); });
+        } catch (const std::exception& error) {
+            std::cerr << "Could not read Sysmon: " << error.what() << "\n"
+                      << "Check that Sysmon is installed, or use --no-sysmon.\n";
+            return kExitStartupFailed;
+        }
+    }
+
     writer->start();
+    if (sysmon) sysmon->start();
 
     std::atomic<bool> etw_finished{false};
     std::string etw_error;
@@ -266,12 +297,16 @@ int wmain(int argc, wchar_t** argv) {
     // errors are caught, because ~trace() cannot safely throw.
     session->stop();
 
+    // After ETW, so held Sysmon events see the final process table, and before the
+    // writer, so their events still reach the file.
+    if (sysmon) sysmon->stop();
+
     writer->stop();
 
     // Last check, so the session can never outlive this process.
     tp::stop_session_by_name();
 
-    print_summary(counters, stats);
+    print_summary(counters, stats, use_sysmon);
     SetEvent(g_shutdown_done);
 
     if (!etw_error.empty()) {

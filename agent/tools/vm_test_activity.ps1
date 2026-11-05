@@ -4,6 +4,10 @@
 #
 # It uses dummy files in a dedicated test folder, and removes everything it creates.
 # The "encryption" step only overwrites copies of dummy files with random bytes.
+#
+# It also makes one web request, which needs NAT on, and opens a handle to its own
+# dummy ping process. It never touches LSASS: that check needs Atomic T1003.001 in
+# step 2.3.
 
 $ErrorActionPreference = 'Stop'
 
@@ -44,13 +48,43 @@ $stream = New-Object System.IO.FileStream(
 $stream.Write([byte[]](1, 2, 3), 0, 3)
 $stream.Dispose()
 
-# Run key: added and removed straight away.
-$runKey = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run'
-& reg add $runKey /v ThreatPulseTest /t REG_SZ /d C:\Windows\System32\notepad.exe /f | Out-Null
-& reg delete $runKey /v ThreatPulseTest /f | Out-Null
+# Run and RunOnce keys: added and removed straight away.
+foreach ($name in 'Run', 'RunOnce') {
+    $key = "HKCU\Software\Microsoft\Windows\CurrentVersion\$name"
+    & reg add $key /v ThreatPulseTest /t REG_SZ /d C:\Windows\System32\notepad.exe /f | Out-Null
+    & reg delete $key /v ThreatPulseTest /f | Out-Null
+}
 
 # Clean up. The folder itself must not be reported as a file_delete.
 Remove-Item -Recurse $folder
+
+# A network connection from this process. A failure is only a warning, so the checks
+# for everything else can still run, and check_test_run.py reports the missing event.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest 'https://example.com' -UseBasicParsing -TimeoutSec 20 | Out-Null
+} catch {
+    Write-Warning "The web request failed, so the network checks will fail: $_"
+}
+
+# ProcessAccess on a dummy process, to prove the mask is decoded. sysmon-modular logs
+# 0x21410 for any target. The handle includes vm_read, but nothing is ever read from it.
+$signature = @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+[DllImport("kernel32.dll")]
+public static extern bool CloseHandle(IntPtr handle);
+'@
+$native = Add-Type -MemberDefinition $signature -Name 'ProcessHandle' -Namespace 'ThreatPulseTest' -PassThru
+$dummy = Start-Process 'ping' -ArgumentList '-n 6 127.0.0.1' -WindowStyle Hidden -PassThru
+Start-Sleep -Seconds 1
+$handle = $native::OpenProcess([uint32]0x21410, $false, [uint32]$dummy.Id)
+if ($handle -eq [IntPtr]::Zero) {
+    Write-Warning 'Could not open the dummy process, so the process_access check will fail.'
+} else {
+    [void]$native::CloseHandle($handle)
+}
+Stop-Process -Id $dummy.Id -ErrorAction SilentlyContinue
 
 $pidFile = 'C:\ThreatPulseLab\logs\test_pid.txt'
 Set-Content $pidFile $PID

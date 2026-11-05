@@ -4,6 +4,9 @@
 #include "etw_session.h"
 
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -16,6 +19,7 @@ namespace {
 constexpr wchar_t kProcessProvider[] = L"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}";
 constexpr wchar_t kFileProvider[] = L"{EDD08927-9CC4-4E65-B970-C2560FB5C289}";
 constexpr wchar_t kRegistryProvider[] = L"{70EB4F03-C1DE-4F73-A051-33D13D5413BD}";
+constexpr wchar_t kNetworkProvider[] = L"{7DD42A49-5329-4832-8DFD-43D979153A88}";
 
 constexpr ULONGLONG kProcessKeywords = 0x10;  // WINEVENT_KEYWORD_PROCESS
 
@@ -29,6 +33,10 @@ constexpr ULONGLONG kFileIoKeyword = 0x20;
 
 // CloseKey 0x1 | SetValueKey 0x100 | CreateKey 0x1000 | OpenKey 0x2000 | QueryKey 0x8000
 constexpr ULONGLONG kRegistryKeywords = 0xB101;
+
+// IPV4 0x10 | IPV6 0x20. These also turn on every send and receive, so an event-ID
+// filter keeps only outbound TCP connections. UDP has no connection to report.
+constexpr ULONGLONG kNetworkKeywords = 0x30;
 
 // Kernel-Process event IDs
 constexpr int kProcessStart = 1;
@@ -50,6 +58,10 @@ constexpr int kRegOpenKey = 2;
 constexpr int kRegQueryKey = 4;
 constexpr int kRegSetValue = 5;
 constexpr int kRegCloseKey = 13;
+
+// Kernel-Network event IDs
+constexpr int kTcpConnectV4 = 12;
+constexpr int kTcpConnectV6 = 28;
 
 constexpr uint32_t kFileDirectoryFile = 0x00000001;  // CreateOptions: it is a directory
 
@@ -88,6 +100,21 @@ uint64_t filetime_field(krabs::parser& parser, const wchar_t* name) {
     return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
 }
 
+// `daddr` is 4 or 16 bytes in network order. It is read as raw bytes because the
+// manifest gives it no IP output type, so parse<ip_address> would throw.
+std::wstring format_ip(const std::vector<BYTE>& address) {
+    if (address.size() == 4) {
+        wchar_t text[16];
+        swprintf_s(text, L"%u.%u.%u.%u", address[0], address[1], address[2], address[3]);
+        return text;
+    }
+    wchar_t text[INET6_ADDRSTRLEN];
+    if (address.size() != 16 || !InetNtopW(AF_INET6, address.data(), text, ARRAYSIZE(text))) {
+        throw std::runtime_error("unexpected address size");  // counted by the callback
+    }
+    return text;
+}
+
 }  // namespace
 
 struct EtwSession::Impl {
@@ -97,6 +124,7 @@ struct EtwSession::Impl {
           process_provider(krabs::guid(kProcessProvider)),
           file_provider(krabs::guid(kFileProvider)),
           registry_provider(krabs::guid(kRegistryProvider)),
+          network_provider(krabs::guid(kNetworkProvider)),
           trace(kSessionName) {
         configure(process_provider, kProcessKeywords);
         process_provider.add_on_event_callback(make_callback(&Impl::handle_process));
@@ -121,6 +149,14 @@ struct EtwSession::Impl {
             file_provider.add_on_event_callback(make_callback(&Impl::handle_file));
         }
 
+        // Same approach as the file filter: handle_network() skips anything that gets
+        // through, and any cost shows up as "Lost by ETW".
+        configure(network_provider, kNetworkKeywords);
+        krabs::event_filter network_filter(
+            std::vector<unsigned short>{kTcpConnectV4, kTcpConnectV6});
+        network_filter.add_on_event_callback(make_callback(&Impl::handle_network));
+        network_provider.add_filter(network_filter);
+
         if (options.rundown) {
             file_provider.enable_rundown_events();
             registry_provider.enable_rundown_events();
@@ -141,6 +177,7 @@ struct EtwSession::Impl {
         trace.enable(process_provider);
         trace.enable(file_provider);
         trace.enable(registry_provider);
+        trace.enable(network_provider);
     }
 
     using Handler = void (Impl::*)(krabs::schema&, krabs::parser&, const EVENT_RECORD&);
@@ -264,11 +301,22 @@ struct EtwSession::Impl {
         }
     }
 
+    void handle_network(krabs::schema& schema, krabs::parser& parser, const EVENT_RECORD& record) {
+        const int event_id = schema.event_id();
+        if (event_id != kTcpConnectV4 && event_id != kTcpConnectV6) return;
+
+        // dport is big-endian, like the address. The VM test checks for port 443.
+        const uint16_t port = _byteswap_ushort(parser.parse<uint16_t>(L"dport"));
+        mapper.on_network_connect(make_context(record), parser.parse<uint32_t>(L"PID"),
+                                  format_ip(parser.parse<krabs::binary>(L"daddr").bytes()), port);
+    }
+
     EventMapper& mapper;
     Counters& counters;
     krabs::provider<> process_provider;
     krabs::provider<> file_provider;
     krabs::provider<> registry_provider;
+    krabs::provider<> network_provider;
     krabs::user_trace trace;  // declared after the providers it references
 };
 

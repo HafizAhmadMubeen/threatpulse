@@ -154,7 +154,7 @@ std::string JsonlWriter::format(const PendingEvent& event, const ImageInfo& imag
     json["event_id"] = event_id;
     json["ts"] = format_timestamp(event.filetime_utc);
     json["host"] = host_;
-    json["source"] = "etw";
+    json["source"] = event.source;
     json["event_type"] = event.event_type;
     json["pid"] = event.pid;
     json["ppid"] = event.ppid;
@@ -170,10 +170,11 @@ std::string JsonlWriter::format(const PendingEvent& event, const ImageInfo& imag
         {"path", nullable(event.path)},
         {"old_path", nullable(event.old_path)},
         {"registry_key", nullable(event.registry_key)},
-        {"pid", nullptr},
-        {"access_mask", nullptr},
-        {"dest_ip", nullptr},
-        {"dest_port", nullptr},
+        {"pid", event.target_pid ? Json(*event.target_pid) : Json(nullptr)},
+        {"access_mask", event.access_mask ? Json(*event.access_mask) : Json(nullptr)},
+        {"access_rights", event.access_rights ? Json(*event.access_rights) : Json(nullptr)},
+        {"dest_ip", nullable(event.dest_ip)},
+        {"dest_port", event.dest_port ? Json(*event.dest_port) : Json(nullptr)},
     };
     // Paths can hold invalid Unicode, which must never crash the writer thread.
     return json.dump(-1, ' ', false, Json::error_handler_t::replace);
