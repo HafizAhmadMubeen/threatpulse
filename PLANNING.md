@@ -518,7 +518,7 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
 | FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
-| FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. Registry: from `target.change.new_value`. Files: the restore action first keeps a quarantine copy of the changed file in `C:\ThreatPulseLab\fim\quarantine\`, which approval puts back. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
+| FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. The restore action first saves what it is about to undo in `C:\ThreatPulseLab\fim\quarantine\`, and approval puts that back. Registry: the full value and its type (`reg_type`). Files: a copy of the changed file. `target.change.new_value` is for display only, because it is cut to 1024 characters and has no type. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
 | API | Approve and reject take the body `{"reviewed_by", "action"}`, per action. New `GET /fim/changes`. API response schemas live in `contracts/schemas/api/` |
 | FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
 | FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready` snapshot |
