@@ -347,7 +347,24 @@ Results of the third VM run, the first with step 2.1:
 | Registry writes with a full key, `Started after agent` | 96.0% |
 | `Sysmon read errors` | **783, about one per poll** |
 
-The likely cause is that the reader treated an empty subscription's answer, `ERROR_INVALID_OPERATION`, as a failure. It then replaced its subscription each time, so events could be lost in the gap. The fix is not yet confirmed in the VM. Don't use this run's Sysmon counts as a measure of what Sysmon logged.
+The cause was most likely that the reader treated an empty subscription's answer, `ERROR_INVALID_OPERATION`, as a failure. It then replaced its subscription each time, so events could be lost in the gap. Don't use this run's Sysmon counts as a measure of what Sysmon logged.
+
+Results of the fourth VM run, with the reader fixed:
+
+| Check | Result |
+|---|---|
+| `validate_events.py` | 2547 events, 0 invalid |
+| `check_test_run.py` | 17 of 17 checks passed |
+| Writes by the test process with a path | 100% (132 of 132) |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors` | 0, 0, 0 |
+| `Sysmon read errors` | 0 |
+| `Sysmon events read` against a `Get-WinEvent` count for the same period | 35 and 35 |
+| File writes with a path, `Started after agent` | 96.6% (308 of 319), above the 95% target |
+| Registry writes with a full key, `Started after agent` | 92.6% (113 of 122). There is no target for this |
+
+**Step 2.1 is verified, except for LSASS.** The `process_access` path works on a dummy process, but LSASS access itself stays open until Atomic T1003.001 in step 2.3. The HKLM Run and RunOnce keys are also untested in the VM: only their Sysmon rule was checked.
+
+File coverage depends on what Windows is doing during a run. The third run's gaps came from Windows Update (`MpSigStub`, `wuaucltcore`), svchost services and OneDrive, not from the test, so no resolver change is needed. In the fourth run the gaps were svchost (8) and OneDrive (3). Its registry gaps were PowerShell (5), conhost (2) and ping (1).
 
 Settled in the VM:
 
@@ -363,13 +380,13 @@ Settled in the VM:
 | Are `daddr` and `dport` in network byte order? | Yes. ETW and Sysmon gave the same IP, on port 443 | Third |
 | Does Windows accept the Kernel-Network event-ID filter? | Yes, with no events lost at this load | Third |
 | Does the agent decode the access mask, and see Sysmon deletions? | Yes. `0x21410` gave `vm_read`, and removing the Run value gave `registry_delete` | Third |
+| Does the Sysmon reader see everything? | Yes. 0 errors, and it read the 35 events Sysmon logged in the same period | Fourth |
+| Which programs keep file coverage down? | Background Windows activity, not the test. See the fourth run above | Fourth |
 
 ## Questions to settle in the VM
 
 | Question | How to tell | If the answer is bad |
 |---|---|---|
-| Which programs keep file coverage below 95%? | `coverage_report.py` on the third run's log | Look for a shared cause, such as children writing through a parent's handle |
-| Does the Sysmon reader now see everything? | `Sysmon read errors` is 0, and `Sysmon events read` matches a `Get-WinEvent` count for the same period | Read `First Sysmon errors` in the summary |
 | Do Kernel-Network's connect events include failed connections? | Compare with a connection to a closed port | Document it, because `network_connect` would then mean "attempted" |
 | Does LSASS access appear with `vm_read`? | Atomic T1003.001 in step 2.3 gives a `process_access` event | Use the project-specific Sysmon config from PLANNING.md Section 9 |
 | Do event 12, the Close filter and the network filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
