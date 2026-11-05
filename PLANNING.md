@@ -224,7 +224,9 @@ The Alert carries every attribute the policy engine needs, so the engine never h
 }
 ```
 
-- `risk_score` is the ML score of the subject's process tree, filled in by `score_process`.
+- `risk_score` is the ML score of the subject's process tree, filled in by `score_process`. It is nullable: null means not scored, and policy rules treat null as not matching `risk_score_gte`.
+- `rule_id` is `ML-TRIAGE` for `ml` alerts and `SIG-<name>` for `signature` alerts.
+- An alert with no known process, such as a FIM change with no writer or a file scan, has `subject.pid` 0, `image` `"unknown"`, `signed` false, `signer` null, `trusted_path` false, no `ancestors`, and `risk_score` null. `evidence_event_ids` may be empty only then.
 - `object.access` lists decoded rights such as `vm_read` (from the Sysmon access mask).
 
 ### 5.3 Decision (policy engine → enforcement and dashboard)
@@ -235,10 +237,11 @@ A decision can contain **several actions**, each with its own status.
 {
   "decision_id": "d-0042",
   "alert_id": "a-0042",
+  "ts": "2026-11-04T12:00:06Z",
   "policy_rules": ["P2-persistence-change", "P2b-persistence-origin"],
   "actions": [
-    { "action": "restore", "automatic": true, "status": "executed" },
-    { "action": "suspend", "automatic": true, "status": "skipped", "reason": "process already exited" }
+    { "action": "restore", "automatic": true, "status": "executed", "executed_at": "2026-11-04T12:00:06Z" },
+    { "action": "suspend", "automatic": true, "status": "skipped", "reason": "process already exited", "executed_at": null }
   ],
   "attributes": { "zone": "persistence", "signed": true, "trusted_path": true, "risk_score": 0.91 }
 }
@@ -246,7 +249,11 @@ A decision can contain **several actions**, each with its own status.
 
 - Allowed actions: `alert_only`, `suspend`, `block_network`, `restore`, `request_kill`, `request_delete`.
 - Allowed statuses: `executed`, `failed`, `skipped`, `awaiting_approval`, `approved`, `rejected`.
-- `request_kill` and `request_delete` are always `automatic: false` and start as `awaiting_approval`.
+- `ts` is when the decision was made. Each action's `executed_at` is when it ran, and is null if it has not run.
+- `request_kill` and `request_delete` are always `automatic: false` and start as `awaiting_approval`. They gain `reviewed_by` and `reviewed_at`, set on approve or reject.
+- Automatic actions use only `executed`, `failed` and `skipped`.
+- `reason` is required on `skipped` and `failed`.
+- `policy_rules` may be empty, when only the default applied.
 
 ### 5.4 Report (RAG agent → dashboard)
 
@@ -273,6 +280,8 @@ A decision can contain **several actions**, each with its own status.
 | POST | `/fim/changes/{id}/approve` | Accept a persistence change as legitimate (updates the baseline) |
 | GET | `/reports/{alert_id}` | Incident report |
 | GET | `/stats` | Counts per layer, events filtered before LLM, etc. |
+
+In `/fim/changes/{id}/approve`, `{id}` is the `event_id` of the `fim_change` event.
 
 ### 5.6 Policy rules file (`rules/policy.yaml`)
 
