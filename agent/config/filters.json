@@ -10,7 +10,13 @@
     "C:\\ProgramData\\Microsoft\\Windows Defender\\",
     "C:\\Windows\\Prefetch\\",
     "C:\\Windows\\System32\\LogFiles\\WMI\\",
-    "C:\\Windows\\System32\\winevt\\Logs\\"
+    "C:\\Windows\\System32\\winevt\\Logs\\",
+    "\\Device\\Afd",
+    "\\Device\\CNG",
+    "\\Device\\ConDrv",
+    "\\Device\\KsecDD",
+    "\\Device\\Mailslot\\",
+    "\\Device\\NamedPipe\\"
   ],
   "ignore_process_prefixes": [
     "C:\\Program Files\\Windows Defender\\",

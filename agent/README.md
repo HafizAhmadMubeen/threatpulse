@@ -37,6 +37,8 @@ cd C:\ThreatPulseLab\threatpulse
 |---|---|
 | `--out <file>` | `C:\ThreatPulseLab\logs\events.jsonl` |
 | `--config <file>` | `filters.json` next to the program |
+| `--no-close-events` | Off. Fallback: use it if Close events cause ETW losses. See "How file paths are resolved" |
+| `--rundown` | Off. Experiment: asks ETW to report files and keys that are already open. If Windows refuses, the agent stops with an error |
 
 **To stop it, press Ctrl+C.** The agent stops the session, writes out everything queued and prints a summary. If `--out` already exists, the old file is renamed with a timestamp, so runs never overwrite each other.
 
@@ -92,7 +94,7 @@ Start-Process cmd -ArgumentList '/c timeout /t 3' -Wait
 reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v ThreatPulseTest /t REG_SZ /d C:\Windows\System32\notepad.exe /f
 reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v ThreatPulseTest /f
 
-# File create, write and rename
+# File create, write, rename and delete
 New-Item -ItemType Directory -Force C:\ThreatPulseLab\agent-test
 Set-Content C:\ThreatPulseLab\agent-test\a.txt 'ThreatPulse agent test'
 Rename-Item C:\ThreatPulseLab\agent-test\a.txt b.txt
@@ -109,12 +111,33 @@ Remove-Item -Recurse C:\ThreatPulseLab\agent-test
 | 1.3 | `Show-Events file_create agent-test` | `path` is `...\agent-test\a.txt` |
 | 1.3 | `Show-Events file_write agent-test` | `path` is `...\agent-test\a.txt` |
 | 1.3 | `Show-Events file_rename agent-test` | `path` ends in `b.txt` and `old_path` in `a.txt` |
+| 1.3 | `Show-Events file_delete agent-test` | `path` ends in `b.txt`. The `agent-test` folder itself is not listed |
 | 1.3 | `Select-String -Path $log -SimpleMatch 'threatpulse_agent'` | No results: the agent's own events are dropped |
 | 1.4 | `Show-Events process_start 'System32\\cmd'` | `signed: True`, `signer: Microsoft Windows`, 64-character `sha256` |
 | 1.4 | `Show-Events process_start notepad` | `signed: True`. See the note below |
 | 1.2 | Validate the file (below) | `0 invalid` |
 
-**Notepad:** on Windows 11, `notepad` usually redirects to the Store app under `C:\Program Files\WindowsApps\`, so check which `image` was recorded. A Store image may report `signed: False` or a null `sha256`. The `cmd.exe` row shows whether signature checking works. If `cmd.exe` passes and Notepad doesn't, it needs a closer look rather than counting as an agent failure.
+**Notepad:** on Windows 11, `notepad` redirects to the Store app under `C:\Program Files\WindowsApps\`, so the `image` differs from the path in `cmdline`. The first VM run showed that image with `signed: True` and `signer: Microsoft Corporation`.
+
+**Path coverage and `file_delete`:** `tools/vm_test_activity.ps1` repeats the T1486 pattern on dummy files in `Documents\ThreatPulseTest`: it writes scrambled copies, deletes the originals, renames, and uses delete-on-close. It removes everything it creates. Run it in a new PowerShell process started after the agent, then check the result:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File agent\tools\vm_test_activity.ps1
+# Stop the agent with Ctrl+C, then:
+agent\.venv\Scripts\python agent\tools\check_test_run.py C:\ThreatPulseLab\logs\events.jsonl C:\ThreatPulseLab\logs\test_pid.txt
+```
+
+`-ExecutionPolicy Bypass` applies to that one process and changes no setting.
+
+**Pass criteria:**
+
+| Criterion | Where to see it |
+|---|---|
+| Every write by the test process has a path | `check_test_run.py` |
+| Writes under the Documents test folder have paths | `check_test_run.py`. A write with no path can't be placed in a folder, so this relies on the row above |
+| No wrong paths | `check_test_run.py` covers writes after a rename. A wrong path looks like a right one, so this also rests on the design below |
+| No disk-file paths missing for processes started after the agent | `File writes with a path`, `Started after agent` in the shutdown summary |
+| No event loss | `Lost by ETW` and `Lost, queue full` stay at 0 |
 
 **Clean stop after a crash:**
 
@@ -159,7 +182,9 @@ Writer thread: SHA-256 + signature (per-image cache) -> JSON -> events.jsonl
 | Two threads with a queue | ETW drops events if its callback is slow, so hashing and disk writes stay out of it |
 | A process table | File and registry events carry only a pid, so image, ppid and user come from the table |
 | Name maps | Write events have a `FileKey` and registry writes a `KeyObject`, not usable paths. Earlier events supply the names |
-| Event 30, not event 12, for `file_create` | Event 12 fires on every file open, not only for new files |
+| Event 30, not event 12, for `file_create` | Event 12 fires on every file open, not only for new files. It only feeds the name map |
+| Event 26 for `file_delete` | It has the path and its own keyword. See below |
+| `events.jsonl` opened after the session is live | Otherwise the session never sees the open, and System's flushes of the log get no path and can't be filtered |
 | Catalog fallback for signatures | Many Windows binaries have no signature inside the file. Without this they would look unsigned |
 | Revocation checks off | The VM is often offline during recordings, and a network timeout must not stall the agent |
 | Timestamps from the ETW header | They show when the event happened, not when the agent processed it |
@@ -172,8 +197,36 @@ Writer thread: SHA-256 + signature (per-image cache) -> JSON -> events.jsonl
 | Provider | Keywords | Event IDs |
 |---|---|---|
 | Microsoft-Windows-Kernel-Process | `0x10` | 1 start, 2 stop |
-| Microsoft-Windows-Kernel-File | `0x1A10` | 10, 11 names; 16 write; 27 rename; 30 new file |
-| Microsoft-Windows-Kernel-Registry | `0x3101` | 1, 2 create and open; 5 set value; 13 close |
+| Microsoft-Windows-Kernel-File | `0x1EB0`, or `0x1E90` with `--no-close-events` | 10, 11 names; 12 open; 14 close; 16 write; 26 delete; 27 rename; 30 new file |
+| Microsoft-Windows-Kernel-Registry | `0xB101` | 1, 2 create and open; 4 query; 5 set value; 13 close |
+
+### How file paths are resolved
+
+The priority is **never a wrong path, then coverage**. A null path is an honest gap, while a wrong path could put an event in the wrong protected zone.
+
+| Step | Source | Rule |
+|---|---|---|
+| 1 | `FileKey` -> name, from NameCreate | Used for any process |
+| 2 | `FileObject` -> name, from event 12 | Used only by the process that opened it, because pointers get reused and System's stream file objects never appear in an open event |
+| 3 | `FileKey` -> name, bound on a step 2 match | Lets System's later flushes of the file resolve. Removed when that `FileObject` closes |
+
+Close (event 14) clears old entries. It needs the broad FILEIO keyword, so an event-ID filter removes reads and other operations in the kernel. `--no-close-events` turns off Close, the filter and step 3, and also turns off delete-on-close detection.
+
+A child process writing through a handle its parent opened gets a null path. A script's redirected output is an example.
+
+### Why event 26 for `file_delete`
+
+| Event | Path in the event | Keyword | Verdict |
+|---|---|---|---|
+| 26 DeletePath | Yes, `FilePath` | Its own, `0x400` | **Used** |
+| 18 SetDelete | No | FILEIO only | Same operation, but needs another name lookup |
+| 11 NameDelete | Yes | FILENAME | Not a deletion: it means a name left the tracking table |
+
+| Limit | Effect |
+|---|---|
+| Event 26 comes before the file system's result | `file_delete` means deletion was requested, so a denied delete is still reported |
+| FILE_DELETE_ON_CLOSE produces no event 26 | Caught instead from the event 12 flag and the Close event, and credited to the process that opened the file |
+| Event 26 also fires for folders | Folders are skipped, using the event 12 flag. A folder opened before the agent started is still reported |
 
 ## Event field notes
 
@@ -185,9 +238,10 @@ Writer thread: SHA-256 + signature (per-image cache) -> JSON -> events.jsonl
 | `process.cmdline` | Null when the process exited before it could be read. ETW delivers events up to about a second late, so this is common for short-lived processes such as `reg.exe` |
 | `process.user`, `process.sha256`, `process.signer` | Null when they could not be read |
 | `process.signed` | True only for a verified signature. A failed check is false, so false does not prove a file is unsigned |
-| `target.path` | Null when a file was opened before the agent started, so its name was never seen. For `file_rename`, this is the new path |
+| `target.path` | Null when the name could not be proved, usually because the file was opened before the agent started. For `file_rename`, this is the new path. For `file_delete`, this is the deleted file |
 | `target.old_path` | Set only for `file_rename` |
-| `target.registry_key` | `key\value`, with `(Default)` for an unnamed value. Starts with `HKLM`, `HKCU`, `HKU\<sid>` or, if unresolved, `<unresolved>` |
+| `target.registry_key` | `key\value`, with `(Default)` for an unnamed value. Starts with `HKLM`, `HKCU`, `HKU\<sid>` or `<unresolved>`. After `<unresolved>` comes any known tail of the path, which is never a full key. `KeyName` is empty on SetValueKey events, so this happens when the agent never saw the key being opened |
+| `file_write` from `System` or `Registry` | Flushes of cached data, not the application's own write. Count per process and ignore these for write rates |
 
 ## Noise filters
 
@@ -209,23 +263,36 @@ If the signature check fails or the result is unknown, the event is kept. So a f
 
 The third check tests the chain's root key rather than the `signer` name, because any publisher with a trusted certificate could put "Microsoft" in a display name. This check runs on the writer thread, because signatures aren't known on the ETW thread.
 
+The `\Device\...` path entries remove pipes, the console and similar devices, which are not files on disk. They are also left out of the coverage figures.
+
 Keep filters narrow. A filter that covers a protected zone, such as documents or Run keys, blinds the agent there. There is deliberately no filter for `HKLM\SOFTWARE\Microsoft\Windows Defender\`: tampering with that key is part of held-out technique T1562.001, and Defender's own writes are already covered by the process filter.
 
 After editing `config/filters.json`, rebuild to copy it next to the program, or pass it with `--config`. Use the same filters for every recording in a dataset.
 
-## Questions to settle in the VM
+## What the VM has shown
 
-These can't be answered from documentation. The shutdown summary and the checks above give the answers:
+Settled by the first VM run:
+
+| Question | Answer |
+|---|---|
+| Is rename `FilePath` the new or the old name? | The new name |
+| Are cached writes attributed to the real process? | Yes. System also gets a separate write when it flushes the data |
+| Does ETW attach a SID to these kernel events? | Very likely: `reg.exe` had a `user` but no `cmdline` |
+| Is `KeyName` usable on SetValueKey? | No. It was empty in the 15 unresolved samples checked |
+
+## Questions to settle in the VM
 
 | Question | How to tell | If the answer is bad |
 |---|---|---|
-| Is rename `FilePath` the new or the old name? | `Renames, new path unknown` is above 0, or `file_rename` shows a null `path` | The new name has to come from another source |
-| Do all writes resolve to a path? | `File writes without path` stays low, and the `file_write` check passes | Enable event 12 (keyword `0x80`) to record more names |
-| Does ETW attach a SID to these kernel events? | `user` is filled in on `file_write` events from short-lived processes | `user` stays null when the token can't be read |
-| Do registry paths resolve? | `Unresolved registry keys` stays low, and the `registry_set` check passes | Sysmon Event IDs 12 and 13 (PLANNING.md 4.2) can cover the gaps |
-| Are cached writes attributed to the real process? | `file_write` events show the writing process rather than `System` | Document it, because it affects the ransomware detector's write rates |
-| Is event loss acceptable? | `Lost by ETW` and `Lost, queue full` stay at or near 0 | Increase the buffers in `etw_session.cpp`, or add filters |
+| Do writes from new processes all resolve? | `File writes with a path`, `Started after agent` is at or near 100% | Look at which images are missing paths |
+| Does the Close event-ID filter cost events? | `Lost by ETW` stays at 0 | Use `--no-close-events` |
+| Is event 12 too heavy? | `Lost by ETW` stays at 0 under load | Increase the buffers in `etw_session.cpp` |
+| Do registry paths resolve? | `Registry writes with a full key`, `Started after agent` is near 100% | Sysmon Event IDs 12 and 13 (PHASES.md step 2.1) cover the gaps |
+| Does QueryKey give complete names? | Registry coverage for `Started before agent` rises from the first run's level | Remove keyword `0x8000` |
+| Does rundown name files and keys that are already open? | Coverage for `Started before agent` rises with `--rundown` | Leave it off |
 | Does the Microsoft root check recognise Defender and Sysmon? | No `file_write` events from `MsMpEng.exe` or `Sysmon64.exe` in the log | Safe but noisy: those events stay in the log. Check `chains_to_microsoft_root` in `enrich.cpp` |
+
+ETW can't name a handle opened before the agent started unless rundown works, so `Started before agent` is not expected to reach 100%. For Run keys, FIM (step 2.2) and Sysmon Event ID 13 cover that gap.
 
 ## Dependencies
 

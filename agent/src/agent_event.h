@@ -37,6 +37,17 @@ struct Counters {
     std::atomic<uint64_t> unresolved_file_paths{0};
     std::atomic<uint64_t> unresolved_registry_keys{0};
     std::atomic<uint64_t> rename_new_path_unknown{0};
+
+    // Path coverage, split by whether the process started before the agent. ETW can
+    // only name a handle if it saw the open, so the two groups mean different things.
+    std::atomic<uint64_t> writes_before{0};
+    std::atomic<uint64_t> writes_with_path_before{0};
+    std::atomic<uint64_t> writes_after{0};
+    std::atomic<uint64_t> writes_with_path_after{0};
+    std::atomic<uint64_t> registry_before{0};
+    std::atomic<uint64_t> registry_resolved_before{0};
+    std::atomic<uint64_t> registry_after{0};
+    std::atomic<uint64_t> registry_resolved_after{0};
 };
 
 }  // namespace tp

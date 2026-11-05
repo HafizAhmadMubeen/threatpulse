@@ -145,7 +145,7 @@ These are agreed **in Phase 0** and stored in `contracts/` as JSON Schema plus s
   "ts": "2026-11-04T12:00:00.123Z",
   "host": "lab-vm-01",
   "source": "etw | sysmon | fim",
-  "event_type": "process_start | process_stop | process_access | file_create | file_write | file_rename | registry_set | network_connect | fim_change",
+  "event_type": "process_start | process_stop | process_access | file_create | file_write | file_rename | file_delete | registry_set | network_connect | fim_change",
   "pid": 4321,
   "ppid": 1200,
   "process": {
@@ -172,6 +172,7 @@ The schema is `contracts/schemas/event.schema.json`.
 
 - `event_id` is `e-<run start UTC, yyyymmddThhmmss>-<counter>`, so IDs stay unique across runs. The counter has at least 6 digits and can grow past that on long runs.
 - `target.old_path` is set only for `file_rename`, where `target.path` is the new path. It is null or absent for every other event type.
+- `file_delete` means a file's deletion was requested, and `target.path` is that file. Mass deletion of originals is a ransomware indicator (Scaife et al. 2016). The event comes before the file system's result, so a request that later fails is still reported.
 - `process.cmdline`, `process.user`, `process.sha256` and `process.signer` can be null when the value could not be read.
 - `process.signed` is never null. It is true only for a verified signature, and a failed check gives `false`.
 - `ppid` is 0 when the parent is unknown.

@@ -39,6 +39,7 @@ struct ProcessInfo {
     std::optional<std::wstring> user;
     std::optional<std::wstring> sid;
     ULONGLONG exited_tick = 0;  // 0 while running
+    bool started_before_agent = true;  // false only if we saw its process_start event
 };
 
 class ProcessTable {

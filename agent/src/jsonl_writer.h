@@ -28,8 +28,9 @@ public:
                 std::function<void()> on_fatal_error);
     ~JsonlWriter();
 
-    // Renames any existing `path` so nothing is lost, then opens it. Throws on failure.
-    void open(const std::filesystem::path& path);
+    // Renames any existing `path` so nothing is lost, then checks the file can be
+    // created. Throws on failure, so a bad path stops the agent at startup.
+    void prepare(const std::filesystem::path& path);
 
     void start();
     void push(PendingEvent&& event);  // never blocks: a full queue drops and counts
@@ -37,6 +38,7 @@ public:
 
 private:
     void worker();
+    bool open_output();
     bool is_filtered(const PendingEvent& event, const ImageInfo& image) const;
     std::string format(const PendingEvent& event, const ImageInfo& image);
     bool flush();
@@ -53,6 +55,7 @@ private:
     bool stopping_ = false;
 
     std::thread thread_;
+    std::filesystem::path path_;
     HANDLE file_ = INVALID_HANDLE_VALUE;
     std::string buffer_;
     uint64_t next_sequence_ = 1;

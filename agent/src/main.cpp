@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cwchar>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -88,9 +89,25 @@ std::string make_run_id() {
 
 void print_usage() {
     std::wcout << L"Usage: threatpulse_agent [--out <file>] [--config <filters.json>]\n"
-               << L"  --out     output file (default " << kDefaultOut << L")\n"
-               << L"  --config  filter file (default: filters.json next to the program)\n"
+               << L"                         [--no-close-events] [--rundown]\n"
+               << L"  --out              output file (default " << kDefaultOut << L")\n"
+               << L"  --config           filter file (default: filters.json next to the program)\n"
+               << L"  --no-close-events  fallback if Close events cause ETW losses\n"
+               << L"  --rundown          experiment: ask ETW to report what is already open\n"
                << L"Stop with Ctrl+C.\n";
+}
+
+void print_coverage(const wchar_t* label, uint64_t covered, uint64_t total) {
+    std::wcout << L"\n  " << label;
+    if (total == 0) {
+        std::wcout << L"no events";
+        return;
+    }
+    wchar_t text[64];
+    swprintf_s(text, L"%.1f%% (%llu of %llu)",
+               100.0 * static_cast<double>(covered) / static_cast<double>(total),
+               static_cast<unsigned long long>(covered), static_cast<unsigned long long>(total));
+    std::wcout << text;
 }
 
 void print_summary(const tp::Counters& counters, const std::optional<tp::SessionStats>& stats) {
@@ -109,6 +126,17 @@ void print_summary(const tp::Counters& counters, const std::optional<tp::Session
     } else {
         std::wcout << L"\nLost by ETW:               could not be read";
     }
+
+    std::wcout << L"\n\nFile writes with a path:";
+    print_coverage(L"Started before agent: ", counters.writes_with_path_before.load(),
+                   counters.writes_before.load());
+    print_coverage(L"Started after agent:  ", counters.writes_with_path_after.load(),
+                   counters.writes_after.load());
+    std::wcout << L"\nRegistry writes with a full key:";
+    print_coverage(L"Started before agent: ", counters.registry_resolved_before.load(),
+                   counters.registry_before.load());
+    print_coverage(L"Started after agent:  ", counters.registry_resolved_after.load(),
+                   counters.registry_after.load());
     std::wcout << std::endl;
 }
 
@@ -117,12 +145,21 @@ void print_summary(const tp::Counters& counters, const std::optional<tp::Session
 int wmain(int argc, wchar_t** argv) {
     std::filesystem::path out_path = kDefaultOut;
     std::filesystem::path config_path = default_config_path();
+    tp::SessionOptions session_options;
 
     for (int i = 1; i < argc; ++i) {
         const std::wstring argument = argv[i];
         if (argument == L"--help" || argument == L"-h") {
             print_usage();
             return kExitOk;
+        }
+        if (argument == L"--no-close-events") {
+            session_options.close_events = false;
+            continue;
+        }
+        if (argument == L"--rundown") {
+            session_options.rundown = true;
+            continue;
         }
         if ((argument == L"--out" || argument == L"--config") && i + 1 < argc) {
             (argument == L"--out" ? out_path : config_path) = argv[++i];
@@ -161,7 +198,7 @@ int wmain(int argc, wchar_t** argv) {
             std::wcerr << L"Cannot write to the output file. Stopping.\n";
             SetEvent(g_stop_requested);
         });
-        writer->open(out_path);
+        writer->prepare(out_path);
     } catch (const std::exception& error) {
         std::cerr << "Startup failed: " << error.what() << "\n";
         return kExitStartupFailed;
@@ -181,11 +218,12 @@ int wmain(int argc, wchar_t** argv) {
     processes.seed_from_snapshot();
 
     tp::EventMapper mapper(GetCurrentProcessId(), paths, *filters, processes, counters,
+                           session_options.close_events,
                            [&writer](tp::PendingEvent&& event) { writer->push(std::move(event)); });
 
     std::optional<tp::EtwSession> session;
     try {
-        session.emplace(mapper, counters);
+        session.emplace(mapper, counters, session_options);
     } catch (const std::exception& error) {
         std::cerr << "Could not set up ETW: " << error.what() << "\n";
         return kExitStartupFailed;

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -29,8 +30,9 @@ class EventMapper {
 public:
     using Sink = std::function<void(PendingEvent&&)>;
 
+    // `close_events` says whether Kernel-File Close (event 14) is being delivered.
     EventMapper(uint32_t own_pid, const PathMapper& paths, const Filters& filters,
-                ProcessTable& processes, Counters& counters, Sink sink);
+                ProcessTable& processes, Counters& counters, bool close_events, Sink sink);
 
     // Kernel-Process
     void on_process_start(const EventContext& context, uint32_t pid, uint32_t ppid,
@@ -40,15 +42,21 @@ public:
     // Kernel-File
     void on_file_name(uint64_t file_key, std::wstring_view nt_path);
     void on_file_name_deleted(uint64_t file_key);
+    void on_file_open(const EventContext& context, uint64_t file_object,
+                      std::wstring_view nt_path, uint32_t create_options);
+    void on_file_close(const EventContext& context, uint64_t file_object, uint64_t file_key);
     void on_file_create(const EventContext& context, std::wstring_view nt_path);
-    void on_file_write(const EventContext& context, uint64_t file_key);
-    void on_file_rename(const EventContext& context, uint64_t file_key,
+    void on_file_write(const EventContext& context, uint64_t file_key, uint64_t file_object);
+    void on_file_rename(const EventContext& context, uint64_t file_key, uint64_t file_object,
+                        std::wstring_view nt_file_path);
+    void on_file_delete(const EventContext& context, uint64_t file_key, uint64_t file_object,
                         std::wstring_view nt_file_path);
 
     // Kernel-Registry
     void on_registry_open(uint64_t base_object, uint64_t key_object, uint32_t status,
                           std::wstring_view base_name, std::wstring_view relative_name);
     void on_registry_close(uint64_t key_object);
+    void on_registry_query(uint64_t key_object, std::wstring_view key_name);
     void on_registry_set(const EventContext& context, uint64_t key_object, uint32_t status,
                          std::wstring_view key_name, std::wstring_view value_name);
 

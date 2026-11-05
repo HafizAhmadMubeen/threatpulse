@@ -36,6 +36,7 @@
         "file_create",
         "file_write",
         "file_rename",
+        "file_delete",
         "registry_set",
         "network_connect",
         "fim_change"
@@ -79,7 +80,7 @@
       ],
       "properties": {
         "path": {
-          "description": "For file_rename, the new path.",
+          "description": "For file_rename, the new path. For file_delete, the deleted file.",
           "type": ["string", "null"]
         },
         "old_path": {

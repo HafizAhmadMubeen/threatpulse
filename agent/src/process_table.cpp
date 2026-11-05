@@ -158,6 +158,7 @@ const ProcessInfo& ProcessTable::on_start(uint32_t pid, uint32_t ppid, std::wstr
     ProcessInfo info;
     info.image = std::move(image);
     info.ppid = ppid;
+    info.started_before_agent = false;
     if (const UniqueHandle process = open_for_query(pid)) {
         if (is_same_process(process.get(), create_time)) read_identity(process.get(), info);
     }

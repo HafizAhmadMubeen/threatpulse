@@ -24,9 +24,19 @@ struct SessionStats {
     uint64_t buffers_lost = 0;
 };
 
+struct SessionOptions {
+    // Close events need the broad FILEIO keyword, narrowed by an event-ID filter.
+    // Turn this off if that causes ETW losses.
+    bool close_events = true;
+
+    // Experiment: asks the file and registry providers to report what is already
+    // open. Off by default, because a refused request stops the agent from starting.
+    bool rundown = false;
+};
+
 class EtwSession {
 public:
-    EtwSession(EventMapper& mapper, Counters& counters);
+    EtwSession(EventMapper& mapper, Counters& counters, const SessionOptions& options);
     ~EtwSession();
 
     void run();   // blocks until stop(); throws if the session cannot start

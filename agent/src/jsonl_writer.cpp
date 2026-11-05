@@ -83,16 +83,27 @@ JsonlWriter::~JsonlWriter() {
     stop();
 }
 
-void JsonlWriter::open(const std::filesystem::path& path) {
+void JsonlWriter::prepare(const std::filesystem::path& path) {
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
     rotate_existing(path);
 
-    // FILE_SHARE_READ lets other tools read the file while the agent is running.
-    file_ = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
-                        FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file_ == INVALID_HANDLE_VALUE) {
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                    CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
         throw std::runtime_error("cannot create output file: " + path.string());
     }
+    CloseHandle(file);
+    path_ = path;
+}
+
+// Opened only once events are arriving. The session must already be live, or it never
+// sees this open, System's flushes of the log have no path, and the path filter for
+// the log folder cannot drop them. Those flushes would then feed the log itself.
+bool JsonlWriter::open_output() {
+    // FILE_SHARE_READ lets other tools read the file while the agent is running.
+    file_ = CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL, nullptr);
+    return file_ != INVALID_HANDLE_VALUE;
 }
 
 void JsonlWriter::start() {
@@ -189,6 +200,10 @@ void JsonlWriter::worker() {
             wake_.wait_for(lock, kFlushInterval, [this] { return stopping_ || !queue_.empty(); });
             batch.swap(queue_);
             stopping = stopping_;
+        }
+
+        if (file_ok && !batch.empty() && file_ == INVALID_HANDLE_VALUE) {
+            file_ok = open_output();
         }
 
         for (const PendingEvent& event : batch) {

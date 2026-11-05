@@ -93,7 +93,7 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 
 | Step | Owner | What to do | Check |
 |---|---|---|---|
-| 2.1 | A | Add network events, and read Sysmon Event IDs 3 and 10 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read` | LSASS access shows as a `process_access` event with decoded rights |
+| 2.1 | A | Add network events, and read Sysmon Event IDs 3, 10, 12 and 13 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read`. Event IDs 12 and 13 give full registry paths where ETW can't name a key | LSASS access shows as a `process_access` event with decoded rights. A Run key write shows as a `registry_set` event with `source: sysmon` and the full key |
 | 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce keys, startup folders and the hosts file. Periodic comparison emits `fim_change` events | Editing the hosts file produces a `fim_change` event |
 | 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`). Take snapshot **`atomic-ready`** | `Invoke-AtomicTest T1547.001 -ShowDetails` works |
 | 2.4 | A | Recording script: start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script: events from that process tree = malicious | One labelled log file per test |
