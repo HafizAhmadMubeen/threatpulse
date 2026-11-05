@@ -54,7 +54,7 @@ The FIM route takes only `reviewed_by`. `{event_id}` is the `fim_change` event's
 
 ## How it works
 
-- **Approval records intent, and nothing else.** It sets `status`, `reviewed_by` and `reviewed_at`. Nothing is killed or deleted, and `backend/` never imports `policy/`. Connecting approval to `policy.execute` is step 4.6 in `PHASES.md`.
+- **Approval records intent, and nothing else.** It sets `status`, `reviewed_by` and `reviewed_at`. Nothing is killed or deleted, and `backend/` never imports `policy/`. Connecting approval to `policy.execute` is step 4.6 in `PHASES.md`. That includes FIM approval, which will update the baseline and re-apply the change (`PLANNING.md` Section 10).
 - **Reviews are kept apart from the data.** They go in the review store, and are layered over an action still at `awaiting_approval`. Once a file shows the action has moved on, the file wins.
 - **Telemetry is data.** A record that is unreadable or fails its schema is skipped and counted in `skipped_records` in `/stats`, so one bad line can't take the dashboard down.
 - **`events_filtered_before_llm`** counts events that are not evidence for any reported alert.

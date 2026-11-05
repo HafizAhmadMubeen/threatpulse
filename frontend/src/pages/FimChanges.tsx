@@ -30,7 +30,8 @@ export function FimChanges() {
       <h1>FIM changes</h1>
       <p className="muted">
         Changes in the persistence zone. Unapproved changes are restored automatically. Approving
-        records that a change is legitimate, and doesn't put it back.
+        records that a change is legitimate. Updating the baseline and re-applying the change are
+        not connected yet.
       </p>
       <AnalystField value={analyst} onChange={setAnalyst} />
       {failure && <p className="error" role="alert">{failure}</p>}
