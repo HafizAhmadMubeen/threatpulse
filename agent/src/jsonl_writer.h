@@ -1,7 +1,8 @@
-// Bounded queue plus writer thread: ETW callback -> queue -> enrich -> events.jsonl.
+// Bounded queue plus writer thread: ETW and Sysmon threads -> queue -> enrich -> events.jsonl.
 //
 // ETW drops events if its callback is slow, so the callback only queues work.
-// Hashing, JSON formatting and disk writes all happen on this thread.
+// Hashing, JSON formatting and disk writes all happen on this thread. Events are
+// written in queue order, so the file is not strictly in time order across sources.
 #pragma once
 
 #include <windows.h>

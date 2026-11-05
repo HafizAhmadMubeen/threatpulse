@@ -95,7 +95,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 ### 4.1 Data flow
 
 ```
-[Agent: C++ ETW/Sysmon collector + FIM module]  ->  events.jsonl  ->  [Pipeline, Python]
+[Agent: C++ ETW/Sysmon collector + FIM module]  ->  events.jsonl + fim.jsonl  ->  [Pipeline, Python]
                                        |-> signature layer (hash, YARA)
                                        |-> heuristic layer (pefile, EMBER model)
                                        |-> FIM alerts (from fim_change events)
@@ -108,7 +108,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 ```
 
 - **Why a JSONL file between the agent and the pipeline?** It is the simplest possible interface. The agent can be tested alone (just check the file), and the pipeline can be tested with sample files before the agent exists. This is what lets the team work in parallel.
-- **FIM** belongs to the agent track. It's a small Python module (`agent/fim/`) running in the VM that writes `fim_change` events into the same JSONL stream. Python is simpler than C++ for hashing files and reading registry values.
+- **FIM** belongs to the agent track. It's a small Python module (`agent/fim/`) running in the VM that writes `fim_change` events to its own `fim.jsonl`, in the same Event format. The pipeline merges the two files by `ts`. Python is simpler than C++ for hashing files and reading registry values.
 
 ### 4.2 Sensors (what the agent collects)
 
@@ -145,7 +145,7 @@ These are agreed **in Phase 0** and stored in `contracts/` as JSON Schema plus s
   "ts": "2026-11-04T12:00:00.123Z",
   "host": "lab-vm-01",
   "source": "etw | sysmon | fim",
-  "event_type": "process_start | process_stop | process_access | file_create | file_write | file_rename | file_delete | registry_set | network_connect | fim_change",
+  "event_type": "process_start | process_stop | process_access | file_create | file_write | file_rename | file_delete | registry_set | registry_delete | network_connect | fim_change",
   "pid": 4321,
   "ppid": 1200,
   "process": {
@@ -162,8 +162,10 @@ These are agreed **in Phase 0** and stored in `contracts/` as JSON Schema plus s
     "registry_key": null,
     "pid": null,
     "access_mask": null,
+    "access_rights": null,
     "dest_ip": null,
-    "dest_port": null
+    "dest_port": null,
+    "change": null
   }
 }
 ```
@@ -176,7 +178,16 @@ The schema is `contracts/schemas/event.schema.json`.
 - `process.cmdline`, `process.user`, `process.sha256` and `process.signer` can be null when the value could not be read.
 - `process.signed` is never null. It is true only for a verified signature, and a failed check gives `false`.
 - `ppid` is 0 when the parent is unknown.
-- Every `target` field can be null, except that `registry_set` requires `registry_key`.
+- Every `target` field can be null, except that `registry_set` and `registry_delete` require `registry_key`.
+- `registry_delete` means a key or value was deleted. It comes from Sysmon Event ID 12, because deleting a Run key must not look like adding one. Sysmon Event ID 13 gives `registry_set`.
+- `process_access` is one process opening another. `pid` and `process` are the process doing it, and `target.pid` and `target.path` are the process it opened.
+- `target.access_mask` is the raw hex string, such as `"0x1010"`. `target.access_rights` is an optional array of the decoded rights, such as `["vm_read", "query_limited_information"]`. It is set only for `process_access`.
+- `network_connect` is an outbound connection. ETW events are TCP only, while Sysmon Event ID 3 covers only what the Sysmon config includes.
+- `fim_change` says an item in the persistence zone differs from its last known state. `target.registry_key` or `target.path` names the item, and `target.change` is required: `{"kind": "added | modified | removed", "old_value": …, "new_value": …}`. Registry items give the data, cut to 1024 characters, and files give the SHA-256. `target.change` is null or absent for every other event type.
+- FIM doesn't know who made a change, so `fim_change` has `pid` 0 and `process.image` `"unknown"`.
+- FIM's `event_id` counter starts at 900000000, so IDs in `fim.jsonl` can't clash with those in `events.jsonl`.
+- One action can appear twice, once per `source`. See "Event sources for ML" in Section 10.
+- `events.jsonl` is not strictly in time order, because ETW and Sysmon arrive on separate threads. Consumers must sort by `ts`, which also merges `fim.jsonl` in.
 
 ### 5.2 Alert (detection layers → policy engine and backend)
 
@@ -213,7 +224,9 @@ The Alert carries every attribute the policy engine needs, so the engine never h
 }
 ```
 
-- `risk_score` is the ML score of the subject's process tree, filled in by `score_process`.
+- `risk_score` is the ML score of the subject's process tree, filled in by `score_process`. It is nullable: null means not scored, and policy rules treat null as not matching `risk_score_gte`.
+- `rule_id` is `ML-TRIAGE` for `ml` alerts and `SIG-<name>` for `signature` alerts.
+- An alert with no known process, such as a FIM change with no writer or a file scan, has `subject.pid` 0, `image` `"unknown"`, `signed` false, `signer` null, `trusted_path` false, no `ancestors`, and `risk_score` null. `evidence_event_ids` may be empty only then.
 - `object.access` lists decoded rights such as `vm_read` (from the Sysmon access mask).
 
 ### 5.3 Decision (policy engine → enforcement and dashboard)
@@ -224,10 +237,11 @@ A decision can contain **several actions**, each with its own status.
 {
   "decision_id": "d-0042",
   "alert_id": "a-0042",
+  "ts": "2026-11-04T12:00:06Z",
   "policy_rules": ["P2-persistence-change", "P2b-persistence-origin"],
   "actions": [
-    { "action": "restore", "automatic": true, "status": "executed" },
-    { "action": "suspend", "automatic": true, "status": "skipped", "reason": "process already exited" }
+    { "action": "restore", "automatic": true, "status": "executed", "executed_at": "2026-11-04T12:00:06Z" },
+    { "action": "suspend", "automatic": true, "status": "skipped", "reason": "process already exited", "executed_at": null }
   ],
   "attributes": { "zone": "persistence", "signed": true, "trusted_path": true, "risk_score": 0.91 }
 }
@@ -235,7 +249,11 @@ A decision can contain **several actions**, each with its own status.
 
 - Allowed actions: `alert_only`, `suspend`, `block_network`, `restore`, `request_kill`, `request_delete`.
 - Allowed statuses: `executed`, `failed`, `skipped`, `awaiting_approval`, `approved`, `rejected`.
-- `request_kill` and `request_delete` are always `automatic: false` and start as `awaiting_approval`.
+- `ts` is when the decision was made. Each action's `executed_at` is when it ran, and is null if it has not run.
+- `request_kill` and `request_delete` are always `automatic: false` and start as `awaiting_approval`. They gain `reviewed_by` and `reviewed_at`, set on approve or reject.
+- Automatic actions use only `executed`, `failed` and `skipped`.
+- `reason` is required on `skipped` and `failed`.
+- `policy_rules` may be empty, when only the default applied.
 
 ### 5.4 Report (RAG agent → dashboard)
 
@@ -259,9 +277,14 @@ A decision can contain **several actions**, each with its own status.
 | GET | `/decisions` | List of policy decisions |
 | POST | `/decisions/{id}/approve` | Approve a pending action (kill/delete) |
 | POST | `/decisions/{id}/reject` | Reject it |
-| POST | `/fim/changes/{id}/approve` | Accept a persistence change as legitimate (updates the baseline) |
+| GET | `/fim/changes` | List of FIM changes |
+| POST | `/fim/changes/{id}/approve` | Accept a persistence change as legitimate (updates the baseline and re-applies the change) |
 | GET | `/reports/{alert_id}` | Incident report |
 | GET | `/stats` | Counts per layer, events filtered before LLM, etc. |
+
+- In `/fim/changes/{id}/approve`, `{id}` is the `event_id` of the `fim_change` event.
+- `/decisions/{id}/approve` and `/decisions/{id}/reject` take the body `{"reviewed_by": "…", "action": "…"}`, per action, because one decision can hold several actions.
+- API response schemas live in `contracts/schemas/api/`.
 
 ### 5.6 Policy rules file (`rules/policy.yaml`)
 
@@ -329,7 +352,7 @@ default: [alert_only]
 
 Instead we protect the **object**, which is classic integrity checking:
 - Every change that isn't approved is restored.
-- When a legitimate installer adds a Run key, the change appears on the dashboard, the analyst approves it, and the baseline updates.
+- When a legitimate installer adds a Run key, the change appears on the dashboard, the analyst approves it, the baseline updates, and the restored change is re-applied.
 - Suspension depends on the **risk score** of the process tree, and is skipped if those processes have already exited.
 
 **Why LSASS uses an allowlist and starts in learning mode.**
@@ -481,6 +504,8 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Free-tier LLM limits or outage | Switch provider with one setting. Fall back to a local model (Ollama on the lab workstation's GPU) |
 | VM evaluation licence expires (90 days) | Rebuild from the ISO. Keep setup steps scripted in `docs/lab-setup.md` |
 | A member falls behind | See "Rebalancing" in ROADMAP.md. Simplify a layer, never remove it |
+| The backend API has no authentication, so any process in the VM could approve its own change | Must be solved before step 4.6 |
+| `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Verify with Atomic T1003.001 in step 2.3 | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM |
 
 ## 10. Decisions
 
@@ -492,6 +517,13 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | LSASS visibility | Sysmon Event ID 10 with `sysmon-modular`, learning → enforcing mode |
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
+| FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
+| FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. The restore action first saves what it is about to undo in `C:\ThreatPulseLab\fim\quarantine\`, and approval puts that back. Registry: the full value and its type (`reg_type`). Files: a copy of the changed file. `target.change.new_value` is for display only, because it is cut to 1024 characters and has no type. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
+| API | Approve and reject take the body `{"reviewed_by", "action"}`, per action. New `GET /fim/changes`. API response schemas live in `contracts/schemas/api/` |
+| FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
+| FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready` snapshot |
+| Path coverage targets | 100% for the test or attack process and the documents zone (met: 127 of 127). At least 95% for all processes started after the agent (met: 97.9%). The remaining 3 writes are accepted |
+| Event sources for ML | Counts and rates use `source: etw` only, so one action is never counted twice. Sysmon events give zone signals, which may be used as features: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13). Detection rules may use either source |
 | Ransomware zone | Controlled Folder Access **and** own detector |
 | Persistence zone | Restore unapproved changes. Suspend only by risk score |
 | Logs out of VM | Export procedure, Section 3.2 |

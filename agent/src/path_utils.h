@@ -25,4 +25,8 @@ private:
 std::wstring normalize_registry_key(std::wstring_view kernel_key,
                                     const std::optional<std::wstring>& user_sid);
 
+// Sysmon already shortens root keys. This applies the same HKCU rule to HKU\<sid>\X.
+std::wstring normalize_sysmon_registry_key(std::wstring_view sysmon_key,
+                                           const std::optional<std::wstring>& user_sid);
+
 }  // namespace tp

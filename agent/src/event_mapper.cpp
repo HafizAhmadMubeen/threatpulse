@@ -254,4 +254,21 @@ void EventMapper::on_registry_set(const EventContext& context, uint64_t key_obje
     sink_(std::move(event));
 }
 
+void EventMapper::on_network_connect(const EventContext& context, uint32_t pid,
+                                     std::wstring dest_ip, uint16_t dest_port) {
+    if (pid == own_pid_) {
+        ++counters_.own_dropped;
+        return;
+    }
+    // No event user here: it can belong to whichever thread logged the event.
+    const ProcessInfo& info = processes_.lookup(pid, nullptr);
+
+    // Not open to the process filter: labelling and the network zone need every
+    // connection, and connections are far rarer than file writes.
+    PendingEvent event = make_event(context, "network_connect", pid, info);
+    event.dest_ip = std::move(dest_ip);
+    event.dest_port = dest_port;
+    sink_(std::move(event));
+}
+
 }  // namespace tp

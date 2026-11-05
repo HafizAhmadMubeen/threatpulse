@@ -1,14 +1,16 @@
 # ThreatPulse agent
 
-The Sense part of Track A, covering PHASES.md steps 1.1 to 1.4. It's a user-mode C++ program that collects process, file and registry activity through ETW and writes [Event records](../PLANNING.md#51-event-agent--pipeline-one-json-object-per-line-in-eventsjsonl) to a JSONL file. This is the telemetry behind the 3rd-generation behaviour layer and the 4th-generation ML triage.
+The Sense part of Track A, covering PHASES.md steps 1.1 to 1.4 and 2.1. It's a user-mode C++ program that collects process, file, registry and network activity through ETW, reads Sysmon events from the Windows Event Log, and writes [Event records](../PLANNING.md#51-event-agent--pipeline-one-json-object-per-line-in-eventsjsonl) to a JSONL file. This is the telemetry behind the 3rd-generation behaviour layer and the 4th-generation ML triage.
 
 **The agent only observes.** It changes no system setting, and the only ETW session it ever stops is its own, `ThreatPulse-Agent`.
+
+File Integrity Monitoring for the persistence zone is a separate Python program in the same track. See [fim/README.md](fim/README.md).
 
 **Build and run it only in the lab VM**, never on a developer laptop or from WSL. It refuses to start unless `C:\ThreatPulseLab\LAB_VM` exists and it has administrator rights.
 
 ## Build
 
-You need Git, Python 3.12, and Visual Studio Build Tools with "Desktop development with C++", including its CMake tools. The VM needs network access (NAT) for the first configure, because CMake downloads krabsetw and nlohmann/json.
+You need Git, Python 3.12, and Visual Studio Build Tools with "Desktop development with C++", including its CMake tools. Running it also needs Sysmon, installed as in `docs/lab-setup.md`. The VM needs network access (NAT) for the first configure, because CMake downloads krabsetw and nlohmann/json.
 
 In **Developer PowerShell for VS**:
 
@@ -39,6 +41,7 @@ cd C:\ThreatPulseLab\threatpulse
 | `--config <file>` | `filters.json` next to the program |
 | `--no-close-events` | Off. Fallback: use it if Close events cause ETW losses. See "How file paths are resolved" |
 | `--rundown` | Off. Untested experiment: asks ETW to report files and keys that are already open. If Windows refuses, the agent stops with an error |
+| `--no-sysmon` | Off. Runs without Sysmon, so there are no LSASS signals and no Sysmon registry events. Without this option, a missing Sysmon stops the agent, so a recording can't silently lack zone signals |
 
 **To stop it, press Ctrl+C.** The agent stops the session, writes out everything queued and prints a summary. If `--out` already exists, the old file is renamed with a timestamp, so runs never overwrite each other.
 
@@ -54,7 +57,7 @@ logman stop "ThreatPulse-Agent" -ets
 | 1 | Bad arguments |
 | 2 | Not the lab VM (`LAB_VM` marker missing) |
 | 3 | Not running as administrator |
-| 4 | Startup failed (filter file, output file or ETW setup) |
+| 4 | Startup failed (filter file, output file, ETW setup or Sysmon) |
 | 5 | The ETW session failed while running |
 
 ## Checks
@@ -112,18 +115,18 @@ Remove-Item -Recurse C:\ThreatPulseLab\agent-test
 | 1.3 | `Show-Events file_write agent-test` | `path` is `...\agent-test\a.txt` |
 | 1.3 | `Show-Events file_rename agent-test` | `path` ends in `b.txt` and `old_path` in `a.txt` |
 | 1.3 | `Show-Events file_delete agent-test` | `path` ends in `b.txt`. The `agent-test` folder itself is not listed |
-| 1.3 | `Select-String -Path $log -SimpleMatch 'threatpulse_agent'` | No results: the agent's own events are dropped |
+| 1.3 | `Select-String -Path $log -Pattern '"image":"[^"]*threatpulse_agent'` | No results: the agent's own events are dropped. Its name can still appear as a target, when Sysmon reports another process opening it |
 | 1.4 | `Show-Events process_start 'System32\\cmd'` | `signed: True`, `signer: Microsoft Windows`, 64-character `sha256` |
 | 1.4 | `Show-Events process_start notepad` | `signed: True`. See the note below |
 | 1.2 | Validate the file (below) | `0 invalid` |
 
 **Notepad:** on Windows 11, `notepad` redirects to the Store app under `C:\Program Files\WindowsApps\`, so the `image` differs from the path in `cmdline`. The first VM run showed that image with `signed: True` and `signer: Microsoft Corporation`.
 
-**Path coverage and `file_delete`:** `tools/vm_test_activity.ps1` repeats the T1486 pattern on dummy files in `Documents\ThreatPulseTest`: it writes scrambled copies, deletes the originals, renames, and uses delete-on-close. It removes everything it creates. Run it in a new PowerShell process started after the agent, then check the result:
+**Path coverage, `file_delete`, network and Sysmon:** `tools/vm_test_activity.ps1` repeats the T1486 pattern on dummy files in `Documents\ThreatPulseTest`: it writes scrambled copies, deletes the originals, renames, and uses delete-on-close. It then adds and removes Run and RunOnce values, requests `https://example.com` (this needs NAT on), and opens a handle to its own dummy `ping` process with mask `0x21410`. That handle includes `vm_read`, but nothing is read from it, and the script never touches LSASS. It removes everything it creates. Run it in a new PowerShell process started after the agent, then check the result:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File agent\tools\vm_test_activity.ps1
-# Stop the agent with Ctrl+C, then:
+# Wait 30 seconds, because Sysmon can report connections late. Stop the agent with Ctrl+C, then:
 agent\.venv\Scripts\python agent\tools\check_test_run.py C:\ThreatPulseLab\logs\events.jsonl C:\ThreatPulseLab\logs\test_pid.txt
 ```
 
@@ -136,8 +139,13 @@ agent\.venv\Scripts\python agent\tools\check_test_run.py C:\ThreatPulseLab\logs\
 | Every write by the test process has a path | `check_test_run.py` |
 | Writes under the Documents test folder have paths | `check_test_run.py`. A write with no path can't be placed in a folder, so this relies on the row above |
 | No wrong paths | `check_test_run.py` covers writes after a rename. A wrong path looks like a right one, so this also rests on the design below |
-| No disk-file paths missing for processes started after the agent | `File writes with a path`, `Started after agent` in the shutdown summary |
-| No event loss | `Lost by ETW` and `Lost, queue full` stay at 0 |
+| At least 95% of file writes have a path, for all processes started after the agent | `File writes with a path`, `Started after agent` in the shutdown summary |
+| No event loss | `Lost by ETW`, `Lost, queue full` and `Sysmon read errors` stay at 0 |
+| Sysmon reports the Run and RunOnce writes, and the Run value's removal as `registry_delete` | `check_test_run.py` |
+| ETW and Sysmon both report the web request, with the same destination IP | `check_test_run.py`. A byte-order mistake in the ETW fields would fail this or the port 443 check |
+| The dummy process access is decoded with `vm_read` | `check_test_run.py`. The LSASS check itself stays open until step 2.3 |
+
+To see which programs caused any gaps, run `agent\.venv\Scripts\python agent\tools\coverage_report.py <events.jsonl>`.
 
 **Clean stop after a crash:**
 
@@ -170,10 +178,12 @@ In WSL, use `cd agent && uv sync`, then `uv run python tools/validate_events.py 
 
 ```
 ETW session "ThreatPulse-Agent"
-   | Kernel-Process, Kernel-File, Kernel-Registry
+   | Kernel-Process, Kernel-File, Kernel-Registry, Kernel-Network
    v
 ETW thread:    parse -> process table + name maps -> filters -> bounded queue
-                                                                    |
+                                                                 ^     |
+Sysmon thread: EvtSubscribe -> map IDs 3, 10, 12, 13 ------------+     |
+                                                                       v
 Writer thread: SHA-256 + signature (per-image cache) -> JSON -> events.jsonl
 ```
 
@@ -191,6 +201,8 @@ Writer thread: SHA-256 + signature (per-image cache) -> JSON -> events.jsonl
 | Process events are never filtered | Labelling depends on complete process trees (PHASES.md step 2.4) |
 | Process filters need path AND a Microsoft signature | A path alone can be imitated. Same principle as the never-suspend list |
 | krabsetw included from one file only | Its headers define `INITGUID`, which risks duplicate-symbol link errors across files |
+| Sysmon on its own thread | A slow event log must never delay the ETW callback |
+| Sysmon and network events skip the noise filters | The Sysmon config already filters, and a dropped event here could be a missed zone signal |
 
 **ETW events used:**
 
@@ -199,6 +211,9 @@ Writer thread: SHA-256 + signature (per-image cache) -> JSON -> events.jsonl
 | Microsoft-Windows-Kernel-Process | `0x10` | 1 start, 2 stop |
 | Microsoft-Windows-Kernel-File | `0x1EB0`, or `0x1E90` with `--no-close-events` | 10, 11 names; 12 open; 14 close; 16 write; 26 delete; 27 rename; 30 new file |
 | Microsoft-Windows-Kernel-Registry | `0xB101` | 1, 2 create and open; 4 query; 5 set value; 13 close |
+| Microsoft-Windows-Kernel-Network | `0x30` | 12 TCP connect over IPv4; 28 TCP connect over IPv6 |
+
+Kernel-Network's keywords also turn on every send and receive, so an event-ID filter keeps only the two connect events. Its `PID` field is used rather than the event header, which can name a different process. `daddr` and `dport` are read as network byte order, and the VM test checks this.
 
 ### How file paths are resolved
 
@@ -228,10 +243,42 @@ A child process writing through a handle its parent opened gets a null path. A s
 | FILE_DELETE_ON_CLOSE produces no event 26 | Caught instead from the event 12 flag and the Close event, and credited to the process that opened the file |
 | Event 26 also fires for folders | Folders are skipped, using the event 12 flag. A folder opened before the agent started is still reported |
 
+## Sysmon events
+
+| Sysmon ID | Event | Fields |
+|---|---|---|
+| 3 NetworkConnect | `network_connect` | `dest_ip`, `dest_port`. Only `Initiated=true`: inbound connections are skipped and counted |
+| 10 ProcessAccess | `process_access` | `pid` and `process` are the source, `target.pid` and `target.path` the target. `access_mask` is the raw hex and `access_rights` the decoded names |
+| 12 RegistryEvent | `registry_delete` | Full key. `CreateKey` is skipped and counted: it writes no value, and `sysmon-modular` excludes it |
+| 13 RegistryEvent | `registry_set` | Full key and value |
+
+**Process details:** Sysmon events name the image and user, but have no parent or command line, so those come from the process table. They are used only if the table's image matches Sysmon's, so a reused pid can't give an event another process's details. ETW start events arrive late, so a miss is retried for 2 seconds. After that the event keeps Sysmon's image and user, with `ppid` 0 and `cmdline` null, and adds to `Sysmon, no process info`.
+
+**Registry keys:** `HKU\<sid>\...` becomes `HKCU\...` when the key belongs to the user who wrote it, the same rule as ETW. Sysmon also writes `HKCR` for `HKLM\Classes`, and `CurrentControlSet` where ETW shows `ControlSet001`, so the two sources can differ for those keys.
+
+**How ETW and Sysmon are used together (PLANNING.md Section 10):**
+
+| Use | Source |
+|---|---|
+| ML counts and rates | `source: etw` only, so one action is never counted twice |
+| Zone signals, which may be ML features | Sysmon: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13) |
+| Detection rules | Either source |
+
+**What `sysmon-modular` covers.** This was checked by testing sample events against the rules of release `configs-a45dedb13a43`, not against Sysmon itself. In the VM, the installed `sysmonconfig.xml` has the same Run and `0x21410` rules, and the third run produced events for HKCU Run, HKCU RunOnce and `0x21410`. The HKLM rows are not yet tested in the VM. Piping `Sysmon64.exe -c` into `Select-String` finds nothing there, so search the XML file instead.
+
+| Area | Result |
+|---|---|
+| Run, RunOnce, RunOnceEx, under HKCU and HKLM, including WOW6432Node | Logged, through `TargetObject contains \CurrentVersion\Run` |
+| Run key writes by `System`, `backgroundTaskHost.exe` or anything under `C:\$WINDOWS.~BT\` | Not logged, because exclusions win. The config also excludes vendor tools by path. FIM still catches the change |
+| Network | Only selected programs and ports. `powershell.exe`, `cmd.exe`, `rundll32.exe` and anything under `C:\Users` are logged. `curl.exe` and programs in `Program Files` on port 443 are not, which is one reason ETW's Kernel-Network is added |
+| LSASS access | `0x1010`, `0x1F1FFF`, `0x1FFFFF` and `0x143A` are logged. `0x1000` and `0x1400` are excluded. `0x1410` is logged only with an `UNKNOWN` call trace. See the risk in PLANNING.md Section 9 |
+
 ## Event field notes
 
 | Field | Behaviour |
 |---|---|
+| File order | **`events.jsonl` is not strictly time-ordered**, because ETW and Sysmon arrive on separate threads and can be seconds apart. Consumers must sort by `ts` |
+| `ts` | UTC. ETW events use the event header, and Sysmon events use its `UtcTime`, which is when the action happened |
 | `event_id` | `e-<run start UTC>-<counter>`, for example `e-20261105T101500-000123`. The counter has at least 6 digits and grows past that on long runs |
 | `ppid` | 0 when the parent is unknown |
 | `process.image` | Full path when known, otherwise `System` or `unknown` |
@@ -240,12 +287,14 @@ A child process writing through a handle its parent opened gets a null path. A s
 | `process.signed` | True only for a verified signature. A failed check is false, so false does not prove a file is unsigned |
 | `target.path` | Null when the name could not be proved, usually because the file was opened before the agent started. For `file_rename`, this is the new path. For `file_delete`, this is the deleted file |
 | `target.old_path` | Set only for `file_rename` |
+| `target.pid`, `target.access_mask`, `target.access_rights` | Set only for `process_access`. For example, `0x21410` decodes to `vm_read`, `query_information`, `query_limited_information` and `read_control`. A bit with no name appears as `unknown_0x...` |
+| `target.dest_ip`, `target.dest_port` | Set only for `network_connect` |
 | `target.registry_key` | `key\value`, with `(Default)` for an unnamed value. Starts with `HKLM`, `HKCU`, `HKU\<sid>` or `<unresolved>`. After `<unresolved>` comes any known tail of the path, which is never a full key. `KeyName` is empty on SetValueKey events, so this happens when the agent never saw the key being opened |
 | `file_write` from `System` or `Registry` | Flushes of cached data, not the application's own write. Count per process and ignore these for write rates |
 
 ## Noise filters
 
-`config/filters.json` holds three prefix lists, matched case-insensitively:
+`config/filters.json` holds three prefix lists, matched case-insensitively. They apply only to ETW file and registry events:
 
 | List | Drops |
 |---|---|
@@ -284,7 +333,42 @@ Results of the second VM run, with default options and `tools/vm_test_activity.p
 | Registry writes with a full key, `Started after agent` | 87.1% (27 of 31) |
 | Registry writes with a full key, `Started before agent` | 58.7% (935 of 1594) |
 
-The pass criterion "No disk-file paths missing for processes started after the agent" is not strictly met: 3 of 140 writes had no path.
+**Path coverage targets (PLANNING.md Section 10):** 100% for the test or attack process and the documents zone, met at 127 of 127, and at least 95% for all processes started after the agent, met at 97.9%. The remaining 3 writes are accepted.
+
+These results predate the Sysmon and network work, so they cover steps 1.1 to 1.4 only.
+
+Results of the third VM run, the first with step 2.1:
+
+| Check | Result |
+|---|---|
+| `validate_events.py` | 6651 events, 0 invalid |
+| `check_test_run.py` | 17 of 17 checks passed |
+| Writes by the test process with a path | 100% (132 of 132) |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors` | 0, 0, 0 |
+| File writes with a path, `Started after agent` | **93.9% (663 of 706), below the 95% target** |
+| Registry writes with a full key, `Started after agent` | 96.0% |
+| `Sysmon read errors` | **783, about one per poll** |
+
+The cause was most likely that the reader treated an empty subscription's answer, `ERROR_INVALID_OPERATION`, as a failure. It then replaced its subscription each time, so events could be lost in the gap. Don't use this run's Sysmon counts as a measure of what Sysmon logged.
+
+Results of the fourth VM run, with the reader fixed:
+
+| Check | Result |
+|---|---|
+| `validate_events.py` | 2547 events, 0 invalid |
+| `check_test_run.py` | 17 of 17 checks passed |
+| Writes by the test process with a path | 100% (132 of 132) |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors` | 0, 0, 0 |
+| `Sysmon read errors` | 0 |
+| `Sysmon events read` against a `Get-WinEvent` count for the same period | 35 and 35 |
+| File writes with a path, `Started after agent` | 96.6% (308 of 319), above the 95% target |
+| Registry writes with a full key, `Started after agent` | 92.6% (113 of 122). There is no target for this |
+
+**Step 2.1 is verified, except for LSASS.** The `process_access` path works on a dummy process, but LSASS access itself stays open until Atomic T1003.001 in step 2.3. For the HKLM Run and RunOnce keys, only FIM's handling has been tested in the VM: nothing has checked Sysmon's events for them.
+
+File coverage depends on what Windows is doing during a run. The third run's gaps came from Windows Update (`MpSigStub`, `wuaucltcore`), svchost services and OneDrive, not from the test, so no resolver change is needed. In the fourth run the gaps were svchost (8) and OneDrive (3). Its registry gaps were PowerShell (5), conhost (2) and ping (1).
+
+**Step 2.2 (FIM) is verified.** `check_fim_run.py` passed 12 of 12 checks, and FIM found the change 0.0 seconds after Sysmon. With `--poll-only`, the 60-second compare reported the 2 changes with no notifications, and `check_fim_run.py` passed 2 of 2 checks. See [fim/README.md](fim/README.md).
 
 Settled in the VM:
 
@@ -297,13 +381,19 @@ Settled in the VM:
 | Do the test script's writes resolve, also after a rename? | Yes. All 127 have a path, and writes after the rename use the new name | Second |
 | Does `file_delete` work? | Yes. All 25 originals and the delete-on-close file were reported, and the folder itself was not | Second |
 | Does the Close event-ID filter work at this load? | Yes. Windows accepted it, delete-on-close detection worked and no events were lost, so `--no-close-events` wasn't needed | Second |
+| Are `daddr` and `dport` in network byte order? | Yes. ETW and Sysmon gave the same IP, on port 443 | Third |
+| Does Windows accept the Kernel-Network event-ID filter? | Yes, with no events lost at this load | Third |
+| Does the agent decode the access mask, and see Sysmon deletions? | Yes. `0x21410` gave `vm_read`, and removing the Run value gave `registry_delete` | Third |
+| Does the Sysmon reader see everything? | Yes. 0 errors, and it read the 35 events Sysmon logged in the same period | Fourth |
+| Which programs keep file coverage down? | Background Windows activity, not the test. See the fourth run above | Fourth |
 
 ## Questions to settle in the VM
 
 | Question | How to tell | If the answer is bad |
 |---|---|---|
-| Which writes from new processes still have gaps? | List the 3 file writes and 4 registry writes from the second run. The summary gives only counts | Look for a shared cause. Sysmon Event IDs 12 and 13 (PHASES.md step 2.1) cover the registry gaps |
-| Do event 12 and the Close filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
+| Do Kernel-Network's connect events include failed connections? | Compare with a connection to a closed port | Document it, because `network_connect` would then mean "attempted" |
+| Does LSASS access appear with `vm_read`? | Atomic T1003.001 in step 2.3 gives a `process_access` event | Use the project-specific Sysmon config from PLANNING.md Section 9 |
+| Do event 12, the Close filter and the network filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
 | Does QueryKey give complete names? | Compare runs of the same activity with and without keyword `0x8000`. Total registry coverage rose from 25% (49 of 196) to 59% (962 of 1625), but the workload and other fixes changed too, so this doesn't prove it | Remove keyword `0x8000` |
 | Does the Microsoft root check recognise Defender and Sysmon? | No `file_write` events from `MsMpEng.exe` or `Sysmon64.exe` in the log | Safe but noisy: those events stay in the log. Check `chains_to_microsoft_root` in `enrich.cpp` |
 
@@ -316,6 +406,8 @@ Settled in the VM:
 | [krabsetw](https://github.com/microsoft/krabsetw) | Commit `d626e49c41a2a324ad8b433b186703aa551373b3` | It publishes no tags or releases. This is the commit that bumped its NuGet packages to 4.5.0 |
 | [nlohmann/json](https://github.com/nlohmann/json) | Tag `v3.12.0` | Newest tag when pinned |
 | [jsonschema](https://pypi.org/project/jsonschema/) | Locked in `uv.lock` and `tools/requirements.txt` | Used only by the validator |
+| [pywin32](https://pypi.org/project/pywin32/) | Locked in `uv.lock` and `tools/requirements.txt`, Windows only | Used only by FIM, for the two notification APIs |
+| [pytest](https://pypi.org/project/pytest/) | Locked in `uv.lock` as a development dependency | Used only for tests in WSL |
 
 After changing Python dependencies, regenerate the VM file from `agent/`:
 

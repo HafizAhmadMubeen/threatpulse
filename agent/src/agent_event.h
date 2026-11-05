@@ -5,14 +5,15 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace tp {
 
-// An event after mapping, before hashing and signature checks.
-// `target` fields that ETW never fills (pid, access_mask, dest_ip, dest_port)
-// are written as null by the JSONL writer.
+// An event after mapping, before hashing and signature checks. `source` and
+// `event_type` always point at string literals.
 struct PendingEvent {
     uint64_t filetime_utc = 0;
+    const char* source = "etw";
     const char* event_type = "";
     uint32_t pid = 0;
     uint32_t ppid = 0;
@@ -22,8 +23,13 @@ struct PendingEvent {
     std::optional<std::wstring> path;
     std::optional<std::wstring> old_path;
     std::optional<std::wstring> registry_key;
+    std::optional<uint32_t> target_pid;
+    std::optional<std::string> access_mask;  // raw hex, for example "0x1010"
+    std::optional<std::vector<std::string>> access_rights;
+    std::optional<std::wstring> dest_ip;
+    std::optional<uint16_t> dest_port;
     bool recheck_image = false;  // true on process_start: the file may have changed
-    bool allow_process_filter = false;  // false for process events, which are never filtered
+    bool allow_process_filter = false;  // true only for ETW file and registry events
 };
 
 // Printed at shutdown, so data quality is measured rather than assumed.
@@ -37,6 +43,11 @@ struct Counters {
     std::atomic<uint64_t> unresolved_file_paths{0};
     std::atomic<uint64_t> unresolved_registry_keys{0};
     std::atomic<uint64_t> rename_new_path_unknown{0};
+
+    std::atomic<uint64_t> sysmon_read{0};
+    std::atomic<uint64_t> sysmon_skipped{0};  // inbound connections, CreateKey
+    std::atomic<uint64_t> sysmon_no_process_details{0};
+    std::atomic<uint64_t> sysmon_errors{0};
 
     // Path coverage, split by whether the process started before the agent. ETW can
     // only name a handle if it saw the open, so the two groups mean different things.
