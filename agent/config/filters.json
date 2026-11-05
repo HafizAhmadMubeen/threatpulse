@@ -1,0 +1,29 @@
+{
+  "ignore_path_prefixes": [
+    "C:\\ThreatPulseLab\\logs\\",
+    "C:\\$Extend\\",
+    "C:\\$LogFile",
+    "C:\\$Mft",
+    "C:\\pagefile.sys",
+    "C:\\swapfile.sys",
+    "C:\\System Volume Information\\",
+    "C:\\ProgramData\\Microsoft\\Windows Defender\\",
+    "C:\\Windows\\Prefetch\\",
+    "C:\\Windows\\System32\\LogFiles\\WMI\\",
+    "C:\\Windows\\System32\\winevt\\Logs\\",
+    "\\Device\\Afd",
+    "\\Device\\CNG",
+    "\\Device\\ConDrv",
+    "\\Device\\KsecDD",
+    "\\Device\\Mailslot\\",
+    "\\Device\\NamedPipe\\"
+  ],
+  "ignore_process_prefixes": [
+    "C:\\Program Files\\Windows Defender\\",
+    "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\",
+    "C:\\Windows\\Sysmon64.exe"
+  ],
+  "ignore_registry_prefixes": [
+    "HKLM\\SYSTEM\\ControlSet001\\Services\\bam\\"
+  ]
+}

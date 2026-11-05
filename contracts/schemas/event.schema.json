@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatPulse Event",
+  "description": "One object per line in events.jsonl (PLANNING.md Section 5.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "ts",
+    "host",
+    "source",
+    "event_type",
+    "pid",
+    "ppid",
+    "process",
+    "target"
+  ],
+  "properties": {
+    "event_id": {
+      "description": "e-<run start, UTC, yyyymmddThhmmss>-<counter, at least 6 digits>. Unique across runs.",
+      "type": "string",
+      "pattern": "^e-[0-9]{8}T[0-9]{6}-[0-9]{6,}$"
+    },
+    "ts": {
+      "description": "UTC ISO 8601 with milliseconds.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "host": { "type": "string", "minLength": 1 },
+    "source": { "enum": ["etw", "sysmon", "fim"] },
+    "event_type": {
+      "enum": [
+        "process_start",
+        "process_stop",
+        "process_access",
+        "file_create",
+        "file_write",
+        "file_rename",
+        "file_delete",
+        "registry_set",
+        "network_connect",
+        "fim_change"
+      ]
+    },
+    "pid": { "type": "integer", "minimum": 0 },
+    "ppid": {
+      "description": "0 when the parent is unknown.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "cmdline", "user", "sha256", "signed", "signer"],
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "cmdline": { "type": ["string", "null"] },
+        "user": { "type": ["string", "null"] },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "signed": {
+          "description": "True only for a verified signature. A failed check is false.",
+          "type": "boolean"
+        },
+        "signer": { "type": ["string", "null"] }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "registry_key",
+        "pid",
+        "access_mask",
+        "dest_ip",
+        "dest_port"
+      ],
+      "properties": {
+        "path": {
+          "description": "For file_rename, the new path. For file_delete, the deleted file.",
+          "type": ["string", "null"]
+        },
+        "old_path": {
+          "description": "The previous path. Set only for file_rename.",
+          "type": ["string", "null"]
+        },
+        "registry_key": { "type": ["string", "null"] },
+        "pid": { "type": ["integer", "null"], "minimum": 0 },
+        "access_mask": { "type": ["string", "integer", "null"] },
+        "dest_ip": { "type": ["string", "null"] },
+        "dest_port": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event_type": { "const": "file_rename" } } },
+      "else": {
+        "properties": {
+          "target": { "properties": { "old_path": { "type": "null" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "registry_set" } } },
+      "then": {
+        "properties": {
+          "target": { "properties": { "registry_key": { "type": "string" } } }
+        }
+      }
+    }
+  ]
+}
