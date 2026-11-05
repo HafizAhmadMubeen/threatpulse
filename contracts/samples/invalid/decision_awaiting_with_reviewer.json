@@ -19,8 +19,7 @@
       "automatic": false,
       "status": "awaiting_approval",
       "executed_at": null,
-      "approved_by": "lab-analyst",
-      "approved_at": null
+      "reviewed_by": "lab-analyst"
     }
   ],
   "attributes": {

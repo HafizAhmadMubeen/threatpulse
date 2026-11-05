@@ -11,8 +11,8 @@
       "automatic": true,
       "status": "executed",
       "executed_at": "2026-11-05T09:30:48.200Z",
-      "approved_by": "lab-analyst",
-      "approved_at": "2026-11-05T09:30:48.000Z"
+      "reviewed_by": "lab-analyst",
+      "reviewed_at": "2026-11-05T09:30:48.000Z"
     }
   ],
   "attributes": {

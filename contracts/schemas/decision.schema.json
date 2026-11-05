@@ -85,14 +85,14 @@
           "description": "When the action ran. Null if it has not run. A failed action can give the time of the attempt.",
           "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
         },
-        "approved_by": {
-          "description": "The analyst who approved. Only for request_kill and request_delete.",
-          "type": ["string", "null"],
+        "reviewed_by": {
+          "description": "The analyst who approved or rejected. Only on a request_kill or request_delete that has been reviewed, and kept after it runs.",
+          "type": "string",
           "minLength": 1
         },
-        "approved_at": {
-          "description": "When it was approved. Only for request_kill and request_delete.",
-          "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        "reviewed_at": {
+          "description": "When it was approved or rejected. Same rule as reviewed_by.",
+          "$ref": "#/$defs/timestamp"
         }
       },
       "allOf": [
@@ -102,7 +102,6 @@
             "properties": { "action": { "enum": ["request_kill", "request_delete"] } }
           },
           "then": {
-            "required": ["approved_by", "approved_at"],
             "properties": {
               "automatic": { "const": false },
               "status": {
@@ -111,9 +110,6 @@
             }
           },
           "else": {
-            "not": {
-              "anyOf": [{ "required": ["approved_by"] }, { "required": ["approved_at"] }]
-            },
             "properties": {
               "automatic": { "const": true },
               "status": { "enum": ["executed", "failed", "skipped"] }
@@ -149,28 +145,16 @@
         },
         {
           "if": {
-            "required": ["status"],
-            "properties": { "status": { "const": "awaiting_approval" } }
-          },
-          "then": {
-            "properties": {
-              "approved_by": { "type": "null" },
-              "approved_at": { "type": "null" }
-            }
-          }
-        },
-        {
-          "if": {
             "required": ["action", "status"],
             "properties": {
               "action": { "enum": ["request_kill", "request_delete"] },
-              "status": { "enum": ["approved", "executed", "failed"] }
+              "status": { "enum": ["approved", "rejected", "executed", "failed"] }
             }
           },
-          "then": {
-            "properties": {
-              "approved_by": { "type": "string" },
-              "approved_at": { "type": "string" }
+          "then": { "required": ["reviewed_by", "reviewed_at"] },
+          "else": {
+            "not": {
+              "anyOf": [{ "required": ["reviewed_by"] }, { "required": ["reviewed_at"] }]
             }
           }
         }

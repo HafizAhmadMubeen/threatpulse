@@ -11,8 +11,7 @@
       "automatic": false,
       "status": "executed",
       "executed_at": "2026-11-05T09:30:48.200Z",
-      "approved_by": null,
-      "approved_at": "2026-11-05T09:30:48.000Z"
+      "reviewed_at": "2026-11-05T09:30:48.000Z"
     }
   ],
   "attributes": {

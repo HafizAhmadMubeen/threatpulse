@@ -18,9 +18,7 @@
       "action": "request_kill",
       "automatic": true,
       "status": "awaiting_approval",
-      "executed_at": null,
-      "approved_by": null,
-      "approved_at": null
+      "executed_at": null
     }
   ],
   "attributes": {

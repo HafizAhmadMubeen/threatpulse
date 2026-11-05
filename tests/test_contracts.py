@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from contracts import validate_samples as vs
+from contracts.tools import make_samples
 
 SCHEMAS = vs.SCHEMA_DIR
 SAMPLES = vs.SAMPLES_DIR
@@ -30,9 +31,10 @@ EXPECTED_FAILURES = {
     "decision_request_delete_automatic.json": ("actions/0/automatic", "const"),
     "decision_unknown_action.json": ("actions/0/action", "enum"),
     "decision_skipped_without_reason.json": ("actions/1", "required"),
-    "decision_approval_fields_on_suspend.json": ("actions/0", "not"),
-    "decision_awaiting_with_approver.json": ("actions/1/approved_by", "type"),
-    "decision_executed_request_without_approver.json": ("actions/0/approved_by", "type"),
+    "decision_review_fields_on_suspend.json": ("actions/0", "not"),
+    "decision_awaiting_with_reviewer.json": ("actions/1", "not"),
+    "decision_rejected_without_reviewer.json": ("actions/1", "required"),
+    "decision_executed_request_without_reviewer.json": ("actions/0", "required"),
     "decision_executed_without_time.json": ("actions/0/executed_at", "type"),
     "decision_missing_ts.json": ("", "required"),
     "report_bad_technique_id.json": ("techniques/0/id", "pattern"),
@@ -152,6 +154,33 @@ def test_invalid_file_fails_for_its_reason(validators, name, expected):
 def test_invalid_check_catches_a_file_that_passes(tmp_path, validators, data):
     (tmp_path / "alert_should_fail.json").write_text(json.dumps(data["alerts"][0]), encoding="utf-8")
     assert "should fail" in vs.check_invalid_samples(tmp_path, validators)[0]
+
+
+def test_generator_reproduces_the_committed_samples(tmp_path):
+    make_samples.write_samples(tmp_path)
+    written = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file())
+    committed = sorted(
+        p.relative_to(SAMPLES) for p in SAMPLES.rglob("*") if p.is_file() and p.name != ".gitkeep"
+    )
+    assert written == committed
+    for path in written:
+        assert (tmp_path / path).read_bytes() == (SAMPLES / path).read_bytes(), path
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected"])
+def test_reviewed_action_needs_both_review_fields(validators, data, status):
+    decision = by_id(data["decisions"], "decision_id", "d-0007")
+    action = decision["actions"][1]
+    action.update(status=status, reviewed_by="lab-analyst", reviewed_at="2026-11-05T09:40:00.000Z")
+    assert list(validators["decision"].iter_errors(decision)) == []
+    del action["reviewed_at"]
+    assert list(validators["decision"].iter_errors(decision))
+
+
+def test_review_fields_survive_execution(data):
+    action = by_id(data["decisions"], "decision_id", "d-0001")["actions"][0]
+    assert action["status"] == "executed"
+    assert action["reviewed_by"] == "lab-analyst"
 
 
 def test_samples_include_the_required_cases(data):
