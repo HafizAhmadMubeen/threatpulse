@@ -38,7 +38,7 @@ cd C:\ThreatPulseLab\threatpulse
 | `--out <file>` | `C:\ThreatPulseLab\logs\events.jsonl` |
 | `--config <file>` | `filters.json` next to the program |
 | `--no-close-events` | Off. Fallback: use it if Close events cause ETW losses. See "How file paths are resolved" |
-| `--rundown` | Off. Experiment: asks ETW to report files and keys that are already open. If Windows refuses, the agent stops with an error |
+| `--rundown` | Off. Untested experiment: asks ETW to report files and keys that are already open. If Windows refuses, the agent stops with an error |
 
 **To stop it, press Ctrl+C.** The agent stops the session, writes out everything queued and prints a summary. If `--out` already exists, the old file is renamed with a timestamp, so runs never overwrite each other.
 
@@ -271,28 +271,43 @@ After editing `config/filters.json`, rebuild to copy it next to the program, or 
 
 ## What the VM has shown
 
-Settled by the first VM run:
+Results of the second VM run, with default options and `tools/vm_test_activity.ps1`:
 
-| Question | Answer |
+| Check | Result |
 |---|---|
-| Is rename `FilePath` the new or the old name? | The new name |
-| Are cached writes attributed to the real process? | Yes. System also gets a separate write when it flushes the data |
-| Does ETW attach a SID to these kernel events? | Very likely: `reg.exe` had a `user` but no `cmdline` |
-| Is `KeyName` usable on SetValueKey? | No. It was empty in the 15 unresolved samples checked |
+| `validate_events.py` | 4197 events, 0 invalid |
+| `check_test_run.py` | 10 of 10 checks passed |
+| Writes by the test process with a path | 100% (127 of 127) |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors` | 0, 0, 0 |
+| File writes with a path, `Started after agent` | 97.9% (137 of 140) |
+| File writes with a path, `Started before agent` | 5.1% (119 of 2331) |
+| Registry writes with a full key, `Started after agent` | 87.1% (27 of 31) |
+| Registry writes with a full key, `Started before agent` | 58.7% (935 of 1594) |
+
+The pass criterion "No disk-file paths missing for processes started after the agent" is not strictly met: 3 of 140 writes had no path.
+
+Settled in the VM:
+
+| Question | Answer | Run |
+|---|---|---|
+| Is rename `FilePath` the new or the old name? | The new name | First |
+| Are cached writes attributed to the real process? | Yes. System also gets a separate write when it flushes the data | First |
+| Does ETW attach a SID to these kernel events? | Very likely: `reg.exe` had a `user` but no `cmdline` | First |
+| Is `KeyName` usable on SetValueKey? | No. It was empty in the 15 unresolved samples checked | First |
+| Do the test script's writes resolve, also after a rename? | Yes. All 127 have a path, and writes after the rename use the new name | Second |
+| Does `file_delete` work? | Yes. All 25 originals and the delete-on-close file were reported, and the folder itself was not | Second |
+| Does the Close event-ID filter work at this load? | Yes. Windows accepted it, delete-on-close detection worked and no events were lost, so `--no-close-events` wasn't needed | Second |
 
 ## Questions to settle in the VM
 
 | Question | How to tell | If the answer is bad |
 |---|---|---|
-| Do writes from new processes all resolve? | `File writes with a path`, `Started after agent` is at or near 100% | Look at which images are missing paths |
-| Does the Close event-ID filter cost events? | `Lost by ETW` stays at 0 | Use `--no-close-events` |
-| Is event 12 too heavy? | `Lost by ETW` stays at 0 under load | Increase the buffers in `etw_session.cpp` |
-| Do registry paths resolve? | `Registry writes with a full key`, `Started after agent` is near 100% | Sysmon Event IDs 12 and 13 (PHASES.md step 2.1) cover the gaps |
-| Does QueryKey give complete names? | Registry coverage for `Started before agent` rises from the first run's level | Remove keyword `0x8000` |
-| Does rundown name files and keys that are already open? | Coverage for `Started before agent` rises with `--rundown` | Leave it off |
+| Which writes from new processes still have gaps? | List the 3 file writes and 4 registry writes from the second run. The summary gives only counts | Look for a shared cause. Sysmon Event IDs 12 and 13 (PHASES.md step 2.1) cover the registry gaps |
+| Do event 12 and the Close filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
+| Does QueryKey give complete names? | Compare runs of the same activity with and without keyword `0x8000`. Total registry coverage rose from 25% (49 of 196) to 59% (962 of 1625), but the workload and other fixes changed too, so this doesn't prove it | Remove keyword `0x8000` |
 | Does the Microsoft root check recognise Defender and Sysmon? | No `file_write` events from `MsMpEng.exe` or `Sysmon64.exe` in the log | Safe but noisy: those events stay in the log. Check `chains_to_microsoft_root` in `enrich.cpp` |
 
-ETW can't name a handle opened before the agent started unless rundown works, so `Started before agent` is not expected to reach 100%. For Run keys, FIM (step 2.2) and Sysmon Event ID 13 cover that gap.
+**Rundown was not tested.** `--rundown` stays off, so ETW can't name a handle opened before the agent started, and `Started before agent` is not expected to reach 100%. For Run keys, FIM (step 2.2) and Sysmon Event ID 13 cover that gap.
 
 ## Dependencies
 

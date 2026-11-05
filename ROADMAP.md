@@ -87,7 +87,7 @@ Until a real function exists, its owner provides a **stub** that returns sample 
 
 | Member | Tasks | Done when |
 |---|---|---|
-| **A** | Add network events and Sysmon Event ID 10 (LSASS access). FIM module for Run/RunOnce keys, startup folders, hosts file. **Record the dataset**: benign sessions, Atomic runs and our T1486 script, labelled by the launched process tree. Export logs before each rollback (PLANNING.md 3.2) | Labelled dataset shared with B (shared folder or drive, not the repo) |
+| **A** | Add network events and Sysmon Event IDs 3 (network), 10 (LSASS access), 12 and 13 (registry). FIM module for Run/RunOnce keys, startup folders, hosts file. **Record the dataset**: benign sessions, Atomic runs and our T1486 script, labelled by the launched process tree. Export logs before each rollback (PLANNING.md 3.2) | Labelled dataset shared with B (shared folder or drive, not the repo) |
 | **B** | Behaviour rules in Sigma-style YAML for each test technique, and `match_rules`. Feature extraction code written and tested on sample events or public pre-recorded data (e.g. OTRF Security-Datasets converted to our schema). Train the EMBER static model | Each rule fires on its sample; features compute without errors |
 | **C** | Load ATT&CK STIX data into ChromaDB. Retrieval tests. RAG prompt template with `<telemetry>` delimiters. Compare free-tier providers on a sample report. Dashboard pages for decisions, reports and FIM change approval (mock data) | "process reads LSASS memory" retrieves T1003.001 |
 
