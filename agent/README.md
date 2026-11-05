@@ -4,6 +4,8 @@ The Sense part of Track A, covering PHASES.md steps 1.1 to 1.4 and 2.1. It's a u
 
 **The agent only observes.** It changes no system setting, and the only ETW session it ever stops is its own, `ThreatPulse-Agent`.
 
+File Integrity Monitoring for the persistence zone is a separate Python program in the same track. See [fim/README.md](fim/README.md).
+
 **Build and run it only in the lab VM**, never on a developer laptop or from WSL. It refuses to start unless `C:\ThreatPulseLab\LAB_VM` exists and it has administrator rights.
 
 ## Build
@@ -402,6 +404,8 @@ Settled in the VM:
 | [krabsetw](https://github.com/microsoft/krabsetw) | Commit `d626e49c41a2a324ad8b433b186703aa551373b3` | It publishes no tags or releases. This is the commit that bumped its NuGet packages to 4.5.0 |
 | [nlohmann/json](https://github.com/nlohmann/json) | Tag `v3.12.0` | Newest tag when pinned |
 | [jsonschema](https://pypi.org/project/jsonschema/) | Locked in `uv.lock` and `tools/requirements.txt` | Used only by the validator |
+| [pywin32](https://pypi.org/project/pywin32/) | Locked in `uv.lock` and `tools/requirements.txt`, Windows only | Used only by FIM, for the two notification APIs |
+| [pytest](https://pypi.org/project/pytest/) | Locked in `uv.lock` as a development dependency | Used only for tests in WSL |
 
 After changing Python dependencies, regenerate the VM file from `agent/`:
 

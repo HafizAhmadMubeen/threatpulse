@@ -95,7 +95,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 ### 4.1 Data flow
 
 ```
-[Agent: C++ ETW/Sysmon collector + FIM module]  ->  events.jsonl  ->  [Pipeline, Python]
+[Agent: C++ ETW/Sysmon collector + FIM module]  ->  events.jsonl + fim.jsonl  ->  [Pipeline, Python]
                                        |-> signature layer (hash, YARA)
                                        |-> heuristic layer (pefile, EMBER model)
                                        |-> FIM alerts (from fim_change events)
@@ -108,7 +108,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 ```
 
 - **Why a JSONL file between the agent and the pipeline?** It is the simplest possible interface. The agent can be tested alone (just check the file), and the pipeline can be tested with sample files before the agent exists. This is what lets the team work in parallel.
-- **FIM** belongs to the agent track. It's a small Python module (`agent/fim/`) running in the VM that writes `fim_change` events into the same JSONL stream. Python is simpler than C++ for hashing files and reading registry values.
+- **FIM** belongs to the agent track. It's a small Python module (`agent/fim/`) running in the VM that writes `fim_change` events to its own `fim.jsonl`, in the same Event format. The pipeline merges the two files by `ts`. Python is simpler than C++ for hashing files and reading registry values.
 
 ### 4.2 Sensors (what the agent collects)
 
@@ -164,7 +164,8 @@ These are agreed **in Phase 0** and stored in `contracts/` as JSON Schema plus s
     "access_mask": null,
     "access_rights": null,
     "dest_ip": null,
-    "dest_port": null
+    "dest_port": null,
+    "change": null
   }
 }
 ```
@@ -182,8 +183,11 @@ The schema is `contracts/schemas/event.schema.json`.
 - `process_access` is one process opening another. `pid` and `process` are the process doing it, and `target.pid` and `target.path` are the process it opened.
 - `target.access_mask` is the raw hex string, such as `"0x1010"`. `target.access_rights` is an optional array of the decoded rights, such as `["vm_read", "query_limited_information"]`. It is set only for `process_access`.
 - `network_connect` is an outbound connection. ETW events are TCP only, while Sysmon Event ID 3 covers only what the Sysmon config includes.
+- `fim_change` says an item in the persistence zone differs from its last known state. `target.registry_key` or `target.path` names the item, and `target.change` is required: `{"kind": "added | modified | removed", "old_value": …, "new_value": …}`. Registry items give the data, cut to 1024 characters, and files give the SHA-256. `target.change` is null or absent for every other event type.
+- FIM doesn't know who made a change, so `fim_change` has `pid` 0 and `process.image` `"unknown"`.
+- FIM's `event_id` counter starts at 900000000, so IDs in `fim.jsonl` can't clash with those in `events.jsonl`.
 - One action can appear twice, once per `source`. See "Event sources for ML" in Section 10.
-- `events.jsonl` is not strictly in time order, because ETW and Sysmon arrive on separate threads. Consumers must sort by `ts`.
+- `events.jsonl` is not strictly in time order, because ETW and Sysmon arrive on separate threads. Consumers must sort by `ts`, which also merges `fim.jsonl` in.
 
 ### 5.2 Alert (detection layers → policy engine and backend)
 
@@ -501,6 +505,8 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
 | FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
+| FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
+| FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready` snapshot |
 | Path coverage targets | 100% for the test or attack process and the documents zone (met: 127 of 127). At least 95% for all processes started after the agent (met: 97.9%). The remaining 3 writes are accepted |
 | Event sources for ML | Counts and rates use `source: etw` only, so one action is never counted twice. Sysmon events give zone signals, which may be used as features: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13). Detection rules may use either source |
 | Ransomware zone | Controlled Folder Access **and** own detector |
