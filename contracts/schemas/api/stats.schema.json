@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatPulse API: GET /stats",
+  "description": "Counts for the dashboard (PLANNING.md Section 5.5). Every count map has a key for every allowed value, so a zero is shown rather than missing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "events_total",
+    "alerts_total",
+    "alerts_not_scored",
+    "alerts_by_layer",
+    "alerts_by_zone",
+    "actions_by_status",
+    "pending_approvals",
+    "fim_changes_pending",
+    "reports_total",
+    "events_filtered_before_llm",
+    "skipped_records"
+  ],
+  "properties": {
+    "events_total": { "$ref": "#/$defs/count" },
+    "alerts_total": { "$ref": "#/$defs/count" },
+    "alerts_not_scored": {
+      "description": "Alerts with a null risk_score.",
+      "$ref": "#/$defs/count"
+    },
+    "alerts_by_layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signature", "heuristic", "fim", "rule", "ml"],
+      "properties": {
+        "signature": { "$ref": "#/$defs/count" },
+        "heuristic": { "$ref": "#/$defs/count" },
+        "fim": { "$ref": "#/$defs/count" },
+        "rule": { "$ref": "#/$defs/count" },
+        "ml": { "$ref": "#/$defs/count" }
+      }
+    },
+    "alerts_by_zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documents", "persistence", "lsass", "network", "none"],
+      "properties": {
+        "documents": { "$ref": "#/$defs/count" },
+        "persistence": { "$ref": "#/$defs/count" },
+        "lsass": { "$ref": "#/$defs/count" },
+        "network": { "$ref": "#/$defs/count" },
+        "none": { "$ref": "#/$defs/count" }
+      }
+    },
+    "actions_by_status": {
+      "description": "Includes analyst reviews from the local review store.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executed", "failed", "skipped", "awaiting_approval", "approved", "rejected"],
+      "properties": {
+        "executed": { "$ref": "#/$defs/count" },
+        "failed": { "$ref": "#/$defs/count" },
+        "skipped": { "$ref": "#/$defs/count" },
+        "awaiting_approval": { "$ref": "#/$defs/count" },
+        "approved": { "$ref": "#/$defs/count" },
+        "rejected": { "$ref": "#/$defs/count" }
+      }
+    },
+    "pending_approvals": {
+      "description": "Actions with status awaiting_approval.",
+      "$ref": "#/$defs/count"
+    },
+    "fim_changes_pending": {
+      "description": "fim_change events not yet approved.",
+      "$ref": "#/$defs/count"
+    },
+    "reports_total": { "$ref": "#/$defs/count" },
+    "events_filtered_before_llm": {
+      "description": "Events that are not evidence for any reported alert, so they never reach the LLM.",
+      "$ref": "#/$defs/count"
+    },
+    "skipped_records": {
+      "description": "Records the backend could not use because they are unreadable or fail their schema.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "alerts", "decisions", "reports"],
+      "properties": {
+        "events": { "$ref": "#/$defs/count" },
+        "alerts": { "$ref": "#/$defs/count" },
+        "decisions": { "$ref": "#/$defs/count" },
+        "reports": { "$ref": "#/$defs/count" }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 }
+  }
+}

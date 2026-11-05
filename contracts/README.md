@@ -5,6 +5,7 @@ The formats the tracks build against, described in `PLANNING.md` Section 5. Chan
 | Path | What it is |
 |---|---|
 | `schemas/` | JSON Schema 2020-12 for Event, Alert, Decision and Report |
+| `schemas/api/` | Backend responses with no core format: `/stats` and FIM changes |
 | `samples/` | One consistent lab VM session: `events.jsonl`, `alerts.json`, `decisions.json`, `reports.json` |
 | `samples/invalid/` | Files that must fail, one mistake each. The name's first word selects the schema |
 | `validate_samples.py` | Checks the samples, the links between them, and the invalid files |

@@ -46,6 +46,10 @@ def schema(kind: str) -> dict:
     return json.loads((SCHEMAS / f"{kind}.schema.json").read_text(encoding="utf-8"))
 
 
+def api_schema(name: str) -> dict:
+    return json.loads((SCHEMAS / "api" / f"{name}.schema.json").read_text(encoding="utf-8"))
+
+
 @pytest.fixture(scope="module")
 def validators():
     return vs.load_validators()
@@ -128,6 +132,36 @@ def test_cli_exit_code_for_unreadable_files(tmp_path):
         (
             schema("report")["properties"]["techniques"]["items"]["properties"]["id"]["pattern"],
             schema("alert")["properties"]["technique_ids"]["items"]["pattern"],
+        ),
+        (
+            api_schema("fim_change")["properties"]["event_id"]["pattern"],
+            schema("event")["properties"]["event_id"]["pattern"],
+        ),
+        (
+            api_schema("fim_change")["properties"]["ts"]["pattern"],
+            schema("event")["properties"]["ts"]["pattern"],
+        ),
+        (
+            api_schema("fim_change")["properties"]["reviewed_at"]["pattern"],
+            schema("decision")["$defs"]["timestamp"]["pattern"],
+        ),
+        (
+            api_schema("fim_change")["properties"]["change"],
+            schema("event")["properties"]["target"]["properties"]["change"]
+            | {"type": "object"}
+            | {"description": api_schema("fim_change")["properties"]["change"]["description"]},
+        ),
+        (
+            api_schema("stats")["properties"]["alerts_by_layer"]["required"],
+            schema("alert")["properties"]["layer"]["enum"],
+        ),
+        (
+            api_schema("stats")["properties"]["alerts_by_zone"]["required"],
+            schema("alert")["properties"]["object"]["properties"]["zone"]["enum"],
+        ),
+        (
+            api_schema("stats")["properties"]["actions_by_status"]["required"],
+            schema("decision")["$defs"]["action"]["properties"]["status"]["enum"],
         ),
     ],
 )

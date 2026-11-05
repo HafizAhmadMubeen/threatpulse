@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatPulse API: FIM change",
+  "description": "One fim_change event with its review state. GET /fim/changes returns an array of these, and POST /fim/changes/{event_id}/approve returns one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "ts", "path", "registry_key", "change", "alert_id", "status"],
+  "properties": {
+    "event_id": {
+      "description": "The fim_change event's event_id, used as {event_id} in the approve route.",
+      "type": "string",
+      "pattern": "^e-[0-9]{8}T[0-9]{6}-[0-9]{6,}$"
+    },
+    "ts": {
+      "description": "When FIM saw the change.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "path": { "type": ["string", "null"] },
+    "registry_key": { "type": ["string", "null"] },
+    "change": {
+      "description": "Files give SHA-256 values, registry values give the data.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "old_value", "new_value"],
+      "properties": {
+        "kind": { "enum": ["added", "modified", "removed"] },
+        "old_value": { "type": ["string", "null"] },
+        "new_value": { "type": ["string", "null"] }
+      }
+    },
+    "alert_id": {
+      "description": "The alert with this event as evidence. Null if there is none yet.",
+      "type": ["string", "null"],
+      "pattern": "^a-[0-9]{4,}$"
+    },
+    "status": { "enum": ["pending", "approved"] },
+    "reviewed_by": { "type": "string", "minLength": 1 },
+    "reviewed_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{3})?Z$"
+    }
+  },
+  "if": {
+    "required": ["status"],
+    "properties": { "status": { "const": "approved" } }
+  },
+  "then": { "required": ["reviewed_by", "reviewed_at"] },
+  "else": {
+    "not": {
+      "anyOf": [{ "required": ["reviewed_by"] }, { "required": ["reviewed_at"] }]
+    }
+  }
+}

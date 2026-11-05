@@ -5,7 +5,9 @@ description = "ThreatPulse Python pipeline: detection, triage, backend and contr
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "fastapi==0.162.0",
     "jsonschema>=4.26.0",
+    "uvicorn==0.54.0",
 ]
 
 [tool.uv]
@@ -17,5 +19,6 @@ pythonpath = ["."]
 
 [dependency-groups]
 dev = [
+    "httpx==0.28.1",
     "pytest>=9.2.0",
 ]
