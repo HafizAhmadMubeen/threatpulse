@@ -277,11 +277,14 @@ A decision can contain **several actions**, each with its own status.
 | GET | `/decisions` | List of policy decisions |
 | POST | `/decisions/{id}/approve` | Approve a pending action (kill/delete) |
 | POST | `/decisions/{id}/reject` | Reject it |
-| POST | `/fim/changes/{id}/approve` | Accept a persistence change as legitimate (updates the baseline) |
+| GET | `/fim/changes` | List of FIM changes |
+| POST | `/fim/changes/{id}/approve` | Accept a persistence change as legitimate (updates the baseline and re-applies the change) |
 | GET | `/reports/{alert_id}` | Incident report |
 | GET | `/stats` | Counts per layer, events filtered before LLM, etc. |
 
-In `/fim/changes/{id}/approve`, `{id}` is the `event_id` of the `fim_change` event.
+- In `/fim/changes/{id}/approve`, `{id}` is the `event_id` of the `fim_change` event.
+- `/decisions/{id}/approve` and `/decisions/{id}/reject` take the body `{"reviewed_by": "…", "action": "…"}`, per action, because one decision can hold several actions.
+- API response schemas live in `contracts/schemas/api/`.
 
 ### 5.6 Policy rules file (`rules/policy.yaml`)
 
@@ -349,7 +352,7 @@ default: [alert_only]
 
 Instead we protect the **object**, which is classic integrity checking:
 - Every change that isn't approved is restored.
-- When a legitimate installer adds a Run key, the change appears on the dashboard, the analyst approves it, and the baseline updates.
+- When a legitimate installer adds a Run key, the change appears on the dashboard, the analyst approves it, the baseline updates, and the restored change is re-applied.
 - Suspension depends on the **risk score** of the process tree, and is skipped if those processes have already exited.
 
 **Why LSASS uses an allowlist and starts in learning mode.**
@@ -501,6 +504,7 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Free-tier LLM limits or outage | Switch provider with one setting. Fall back to a local model (Ollama on the lab workstation's GPU) |
 | VM evaluation licence expires (90 days) | Rebuild from the ISO. Keep setup steps scripted in `docs/lab-setup.md` |
 | A member falls behind | See "Rebalancing" in ROADMAP.md. Simplify a layer, never remove it |
+| The backend API has no authentication, so any process in the VM could approve its own change | Must be solved before step 4.6 |
 | `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Verify with Atomic T1003.001 in step 2.3 | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM |
 
 ## 10. Decisions
@@ -514,6 +518,8 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
 | FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
+| FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. Registry: from `target.change.new_value`. Files: the restore action first keeps a quarantine copy of the changed file in `C:\ThreatPulseLab\fim\quarantine\`, which approval puts back. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
+| API | Approve and reject take the body `{"reviewed_by", "action"}`, per action. New `GET /fim/changes`. API response schemas live in `contracts/schemas/api/` |
 | FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
 | FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready` snapshot |
 | Path coverage targets | 100% for the test or attack process and the documents zone (met: 127 of 127). At least 95% for all processes started after the agent (met: 97.9%). The remaining 3 writes are accepted |
