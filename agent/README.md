@@ -198,6 +198,15 @@ Each session also has to pass a clean-start check: if FIM reports a change from 
 
 `pool` in `session.json` says which group of techniques a session belongs to. It isn't the train/test split, which is made later by session.
 
+PowerShell 5.1 writes `session.json` with a UTF-8 byte order mark, so read it with `encoding="utf-8-sig"`. Plain `utf-8` fails on the first character.
+
+**Installers for the `install-uninstall` sessions.** They sit in `C:\ThreatPulseLab\installers` inside the `atomic-ready-2` snapshot, downloaded with NAT on from the publishers' own sites. The hashes are what the VM computed with `Get-FileHash`. They haven't been compared with a publisher's checksum.
+
+| File | SHA-256 |
+|---|---|
+| `7z2605-x64.exe` | `FD99E86F57D8F429EF5ED045BF98315AF962E2309B0F1BA87A147A44C71647D0` |
+| `putty-64bit-0.85-installer.msi` | `2213EBACF962B709411D654A40087508A694756BC4E41C5A1C24AD86596B2511` |
+
 ## How it works
 
 ```
@@ -426,6 +435,39 @@ Settled in the VM:
 | `process_access` decoding | Works: other events show `vm_read`, for example with target `StoreDesktopExtension.exe` |
 
 Windows blocked the dump, but the agent recorded no sign of the attempt in `process_access`. A single test can't show why, and the project Sysmon config in PLANNING.md Section 9 is untested. Nothing was disabled to get this result.
+
+**Batch 1 of the dataset (PHASES.md steps 2.4 and 2.5).** The batch was recorded with `run_batch.ps1`, exported, and checked read-only. Counts only: the logs stay out of the repo.
+
+| Session | Events | Malicious | Benign | None | Exit code | FIM changes |
+|---|---|---|---|---|---|---|
+| 1 T1218.011 #9, run 1 | 1258 | 166 | 1092 | 0 | 0 | 0 |
+| 2 benign `normal-use`, run 1 | 51490 | 0 | 51490 | 0 | | 2 |
+| 3 T1486 script, run 1 | 1384 | 208 | 1176 | 0 | 0 | 0 |
+| 4 T1053.005 #2, run 1 | 702 | 131 | 571 | 0 | 0 | 0 |
+| 5 T1547.001 #2, run 1 | 571 | 131 | 440 | 0 | 0 | 0 |
+| 6 T1547.001 #1, run 1 | 594 | 131 | 461 | 2 | 0 | 2 |
+| 7 T1003.001 #2, run 1 | 1002 | 118 | 884 | 0 | 0 | 0 |
+| 8 T1059.001 #17, run 1 | 777 | 186 | 591 | 0 | 0 | 0 |
+| 9 benign `admin-powershell`, run 2 | 16501 | 0 | 16501 | 0 | | 0 |
+
+| Check | Result |
+|---|---|
+| `validate_events.py` | 0 invalid in all 9 `events.jsonl` files, and in both non-empty `fim.jsonl` files |
+| `label_session.py` on a copy | Gave the same `labels.csv` as the exported ones, for all 9 |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors`, `Sysmon read errors` | 0 in all 9 |
+| `Sysmon, no process info` | 4 in sessions 6, 8 and 9, 0 in the others |
+| `filters.json` hash and agent commit | The same in all 9 (`198be4a`) |
+| Clean-start check | Passed for all 9 |
+
+Findings from batch 1, all open (PLANNING.md Section 9 has the risks):
+
+- **The Atomic harness dominates the malicious label.** In the six Atomic sessions, 64% to 98% of the malicious events come from the `Invoke-AtomicTest` PowerShell wrapper (module import, `hostname`, `whoami`, `conhost`), not from the test's own processes, which add between 2 and 67 events. Sessions 4, 5 and 6 have the same 131 malicious events.
+- **FIM doesn't watch `RunOnceEx`.** Atomic T1547.001 #2 is named "Reg Key RunOnce" but writes `HKLM\...\RunOnceEx\0001\Depend`. ETW and Sysmon recorded the add and the delete, and FIM reported nothing, because it watches only `Run` and `RunOnce`.
+- **Normal use produces a `fim_change` pair.** Session 2 has two events: Edge's `MicrosoftEdgeAutoLaunch_*` Run value was removed and added again 140 ms later. A FIM rule would fire on this benign session.
+- **File path coverage is under 95% in every session.** For processes started after the agent it was 88.1% in session 2, 68.8% in session 9 and 90.9% to 94.5% in the attack sessions. Session 9's gaps came from background Windows work (`CompatTelRunner.exe` 1512 of 3583 writes, `provtool.exe` 470 of 1936), and session 2's from `MoUsoCoreWorker.exe`, Edge and `taskhostw.exe`. The sessions start straight after a revert, when Windows is busiest.
+- **The attack processes have 2 or 3 writes with no path in every session** (3 of 106 for the T1486 script), so "100% for the test process" is missed. They are PowerShell's writes to its jump-list file, about 0.3 seconds after it starts. In session 3 they came a second before the first event under the test folder, and all 75 writes under it have a path.
+- **Registry key coverage in the attack sessions is 56.8% to 77.4%,** against 91.6% and 98.9% in the benign ones. A short session is dominated by the start of PowerShell and `cmd.exe`, so zone features built from ETW registry keys can undercount persistence there.
+- **The exit code is the wrapper's, not the technique's.** It was 0 for every attack session, including one where the technique's own command was denied.
 
 ## Questions to settle in the VM
 

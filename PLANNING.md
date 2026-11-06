@@ -461,7 +461,7 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 
 | Technique | Name | Zone / layer | Test material | Train or held-out |
 |---|---|---|---|---|
-| T1547.001 | Registry Run Keys / Startup Folder | Persistence | Atomic #1 Reg Key Run, #2 Reg Key RunOnce | Train |
+| T1547.001 | Registry Run Keys / Startup Folder | Persistence | Atomic #1 Reg Key Run, #2 Reg Key RunOnce (writes `RunOnceEx\0001\Depend`, which FIM doesn't watch) | Train |
 | T1003.001 | OS Credential Dumping: LSASS Memory | LSASS | Atomic #2 comsvcs.dll | Train |
 | T1059.001 | PowerShell | Behaviour | Atomic #17 PowerShell Command Execution | Train |
 | T1105 | Ingress Tool Transfer | Network | Atomic #29 `iwr` download. Needs NAT | Train |
@@ -514,6 +514,10 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | With LSA protection on, rule P1 has no `process_access` event on LSASS to match, so it can't fire | Open. Decide before step 3.1. Until then, P1 is unproven in the VM |
 | The LSASS demo in Section 8.2 ("Accessing process suspended") and step 4.5 can't run as written, and success criterion 2 in Section 1 expects all four zones in a live demo | Open. Decide the LSASS demo before step 4.5 |
 | T1003.001 is a training technique, but its LSASS-access feature will be empty, and the step 3.3 allowlist may have little to learn from | Open. Track B shouldn't rely on that feature for T1003.001 until this is settled. Whether `process_start` gives Track B a usable behaviour signal is unchecked |
+| In batch 1, 64% to 98% of the malicious events in the six Atomic sessions come from the `Invoke-AtomicTest` wrapper, which benign sessions never run. The three held-out techniques share it with the training techniques, so a model could learn the wrapper instead of behaviour, and held-out results would look better than they are (Arp et al. 2022). T1486 has no wrapper | Open. Decide before batch 2, and re-derive the batch 1 labels from the exported logs, which doesn't need a new recording |
+| FIM doesn't watch `RunOnceEx`, and Atomic T1547.001 #2 writes there. ETW and Sysmon saw it, FIM didn't | Open. Adding it changes the FIM target list and the baseline, so it needs a new snapshot. Decide before batch 2 |
+| Benign sessions contain legitimate `fim_change` events: in batch 1, Edge removed and re-added its `MicrosoftEdgeAutoLaunch_*` Run value 140 ms apart. A rule on `fim_change` would fire, and a restore could race with Edge | Open. Document as a Gate 2 false positive, and decide how approval and restore treat it before step 3.2 |
+| The agent's path coverage for processes started after it was under 95% in all 9 batch 1 sessions (68.8% to 94.5%), and the attack processes had 2 or 3 pathless writes each, which misses the 100% target. The sessions start right after a revert, when Windows background work is highest. The pathless writes are PowerShell's jump-list writes, not in a protected zone | Open. Decide whether to accept this, add a warm-up wait after the sensors start, or exclude that start-up window |
 
 ## 10. Decisions
 
