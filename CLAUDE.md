@@ -137,7 +137,7 @@ The full list is in PLANNING.md Section 10.
 | Lab | One lab VM (Track A). B and C develop in WSL only |
 | LLM | Free-tier cloud API through a **provider-agnostic client** (switching provider is one setting); local Ollama as fallback. Keys only in `.env` (gitignored), never in code, logs or commits |
 
-**Still open:** which free-tier provider, ChromaDB vs FAISS (ChromaDB recommended), number of benign sessions. Don't decide these in code; ask.
+**Still open:** which free-tier provider, ChromaDB vs FAISS (ChromaDB recommended). Don't decide these in code; ask.
 
 ## Accepted limitations
 

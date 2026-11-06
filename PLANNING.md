@@ -72,11 +72,11 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 - **Export procedure (how logs leave the VM):**
   1. Stop the agent and all test processes.
   2. Enable a shared folder named `vm-export`.
-  3. Copy **only** `.jsonl` / `.csv` log files into it.
+  3. Copy **only** `.jsonl` and `.csv` log files, `session.json`, and the agent and FIM summary `.txt` files into it.
   4. Disable the shared folder.
   5. Roll back the snapshot.
 
-  Never copy executables, scripts or archives out of the VM.
+  Never copy executables, scripts, archives or memory dumps out of the VM.
 - **EICAR:** the repo stores only its hash and YARA rule, never the file itself. Create the EICAR file only inside the VM. On the host, use a harmless test-marker file instead (a plain text file containing `THREATPULSE-TEST-MARKER`). Never add Defender exclusions on the host.
 - Defender inside the VM may block some Atomic tests. An exclusion for the Atomic folder **inside the VM** is fine.
 - **Credentials inside the VM are low-privilege only:** a read-only Git token or deploy key, and a free-tier LLM API key used only for this project.
