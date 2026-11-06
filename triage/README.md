@@ -6,7 +6,18 @@
 uv run python -m triage.features <session folder> [<session folder> ...] --out features.csv
 ```
 
-A session folder is what `agent/tools/record_session.ps1` and `label_session.py` produce: `events.jsonl`, `fim.jsonl`, `labels.csv` and `session.json`. `fim.jsonl` and `labels.csv` are optional. Without labels, rows say `unlabelled`. `session.json` must have `session_id`, `pool`, `batch` and `network`.
+A session folder is what `agent/tools/record_session.ps1` and `label_session.py` produce: `events.jsonl`, `fim.jsonl`, `labels.csv` and `session.json`. `fim.jsonl` and `labels.csv` are optional. Without labels, rows say `unlabelled`. `session.json` must have `session_id`, `pool`, `batch` and `network`. It may start with a UTF-8 byte order mark, which PowerShell writes.
+
+## The harness is not the technique
+
+`Invoke-AtomicTest` runs each test through a PowerShell wrapper, and the wrapper does far more work than the technique. In the first real recordings most events labelled malicious were the wrapper's. A model trained on them would learn the wrapper, which is Arp et al.'s spurious correlation.
+
+So `labels.csv` has a `part` column: `test`, `harness`, `background`, or empty for FIM events.
+
+- **With a `part` column,** harness events are left out **before** trees are built. Counts and tree shape both describe the test only: the test's own process becomes the root, because its parent no longer has a start event. `harness_excluded` is 1 on every row.
+- **Without one** (the first labels, v1), the wrapper is counted as the test, a warning is logged, and `harness_excluded` is 0. **Don't train on those rows.**
+- An unknown `part` value stops the run, so a new label is never silently kept.
+- Trees made of `background` events stay, labelled benign.
 
 ## What counts as a process tree
 
@@ -34,14 +45,16 @@ A **root** is a process whose parent has no `process_start` in the session. A tr
 - **Counts and rates use ETW only,** so one action is never counted twice (PLANNING.md Section 10). Sysmon gives zone signals.
 - **No names, paths or command lines are features.** Paths and keys only answer "which zone is this", through `detection/zones.py`, and the answer leaves as a number. A test renames every image, command line, file name, extension, address and registry value, and checks that no feature changes.
 - **Not features, on purpose:** `trusted_path`, rule matches, file extensions, and anything about a name. Rule matches stay out so that what we know about held-out techniques can't leak into the model.
-- **FIM links.** A change is linked to the tree that last wrote that exact item within 120 seconds before it. FIM doesn't say who made a change, so this is the only link. Keys are compared ignoring case and `HKU\<sid>` vs `HKCU`.
+- **FIM links.** A change is linked to the tree whose write to that exact item is nearest in time: up to 120 seconds before it, or 0.5 seconds after it. FIM doesn't say who made a change, so this is the only link. Keys are compared ignoring case and `HKU\<sid>` vs `HKCU`.
+  - **Why the half second:** FIM and Sysmon use different clocks. In the first real recordings, FIM's "removed" came 45 ms before the Sysmon delete that caused it.
+  - **Checked on real keys:** ETW writes `HKCU\SOFTWARE\...` where FIM and Sysmon write `HKCU\Software\...`. Comparing ignoring case handles that, and changes were linked in the recordings that had them.
 
 ## Known limits
 
 - **LSASS features may be all 0 in the real data.** With LSA protection on, Windows denies the read and the sensor sees no access event (PLANNING.md 4.3).
 - **T1053.005's task runs outside the launcher's tree,** so only the part that creates it is in the attack tree.
 - **A wrapper process can mix benign and malicious children in one tree.** The tree's label is malicious if any of its events is, and `n_malicious_events` is written so the mix can be seen.
-- **The FIM key form is unchecked on real data.** FIM and ETW must write a key the same way for linking to work. The first real recordings will show if they do. If not, `n_fim_changes_linked` will be 0 everywhere.
+- **A cleanup process is a separate tree.** After each test, a separate process cleans up. It links to a FIM change that undoes the test's change, so one test can link one change to the test and one to the cleanup. Marking cleanup as `harness` in the labels drops it.
 - **Zone patterns are a first list.** `detection/zones.py` lists the document folders, which a user's own folders could escape.
 
 ```bash

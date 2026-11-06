@@ -248,6 +248,72 @@ def test_trusted_path_comes_from_the_image_folder():
     assert outside[0]["subject"]["trusted_path"] is False
 
 
+# Shapes seen in the first real recordings (batch 1)
+
+
+EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+EDGE_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\MicrosoftEdgeAutoLaunch_0123456789ABCDEF0123456789ABCDEF"
+
+
+def edge_autolaunch() -> Recording:
+    """Edge removes and re-adds its own Run value 140 ms apart. FIM's removal is stamped
+    before the Sysmon delete that caused it, because the two use different clocks."""
+    recording = Recording()
+    edge = P(9608, 1392, EDGE, f'"{EDGE}" --no-startup-window --win-session-start')
+    recording.fim(6.054, kind="removed", registry_key=EDGE_KEY)
+    recording.add(edge, "registry_delete", 6.099, source="sysmon", registry_key=EDGE_KEY)
+    recording.add(edge, "registry_set", 6.193, source="sysmon", registry_key=EDGE_KEY)
+    recording.fim(6.195, registry_key=EDGE_KEY)
+    recording.add(edge, "registry_set", 6.196, registry_key=EDGE_KEY)
+    return recording
+
+
+def test_known_false_positive_edge_rewriting_its_own_autolaunch_value():
+    """A legitimate change that these rules call persistence. It is expected, not a bug: the
+    rules look at where something is written, never at who is trusted. The policy engine
+    restores unapproved changes whoever made them, and an analyst approves this one."""
+    alerts = replay(edge_autolaunch().events)
+    assert [a["rule_id"] for a in alerts] == ["R-FIM-PERSISTENCE", "R-T1547-001", "R-FIM-PERSISTENCE"]
+    writer = alerts[1]["subject"]
+    assert (writer["signed"], writer["trusted_path"]) == (True, True)  # which is why trust can't decide
+    assert [a["object"]["registry_key"] for a in alerts] == [EDGE_KEY] * 3
+
+
+def test_etw_and_sysmon_spell_the_same_key_with_different_case():
+    """ETW wrote HKCU\\SOFTWARE\\... and Sysmon HKCU\\Software\\... for one reg.exe call."""
+    recording = Recording()
+    writer = P(532, 1520, "C:\\Windows\\System32\\reg.exe")
+    recording.add(writer, "registry_set", 47.202, source="sysmon", registry_key=RUN_KEY)
+    recording.add(writer, "registry_set", 47.203, registry_key=RUN_KEY.replace("Software", "SOFTWARE"))
+    assert fired(recording) == ["R-T1547-001"]
+
+
+def test_runonceex_as_written_by_atomic_t1547_001_test_2():
+    key = "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnceEx\\0001\\Depend\\1"
+    recording = Recording()
+    writer = P(3068, 7136, "C:\\Windows\\System32\\reg.exe", "REG  ADD HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnceEx\\0001")
+    recording.add(writer, "registry_set", 59.865, source="sysmon", registry_key=key)
+    recording.add(writer, "registry_set", 59.866, registry_key=key)
+    assert fired(recording) == ["R-T1547-001"]
+
+
+def test_known_false_positive_cleanup_that_deletes_the_test_folder_also_fires():
+    """Our own T1486 script deletes 25 originals. The cleanup that removes the test folder
+    afterwards deletes 25 more, from a second PowerShell, so the rule fires again. It is the
+    same behaviour, by a process that is not the attack: the labels call it harness."""
+    recording = deletes(25, 0.1, proc=P(3712, 4724, POWERSHELL, "powershell.exe -NoProfile"))
+    recording.events += deletes(25, 0.1, proc=P(1944, 4724, POWERSHELL, "powershell.exe -NoProfile")).events
+    for number, event in enumerate(recording.events):
+        event["event_id"] = f"e-20261105T093000-{number + 1:06d}"
+        if number >= 25:
+            event["ts"] = event["ts"].replace("09:30:0", "09:30:2")
+    alerts = replay(recording.events)
+    assert sorted(a["subject"]["pid"] for a in alerts) == [1944, 3712]
+    first = min(alerts, key=lambda a: a["ts"])
+    assert first["subject"]["pid"] == 3712
+    assert first["object"]["path"].endswith("dummy9.txt")  # the 10th delete: 10 files already gone
+
+
 # State
 
 

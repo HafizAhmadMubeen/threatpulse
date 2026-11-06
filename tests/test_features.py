@@ -357,6 +357,150 @@ def test_a_feature_with_text_in_it_would_be_caught(rows):
         assert isinstance(row["n_file_write"], (int, float))
 
 
+# The harness is not the technique
+
+
+def harness_recording(extra_harness_writes: int = 300) -> tuple[Recording, set[str]]:
+    """Invoke-AtomicTest's wrapper starts the test, and does far more file work than the test.
+    Returns the recording and the event_ids that belong to the harness."""
+    recording = Recording()
+    wrapper = P(150, 50, POWERSHELL, "powershell.exe -NoProfile")
+    test = P(200, 150, "C:\\Windows\\System32\\reg.exe", "reg.exe add x")
+    cleanup = P(900, 50, POWERSHELL, "powershell.exe -NoProfile")
+    harness_ids = set()
+
+    def mark(event):
+        harness_ids.add(event["event_id"])
+
+    mark(recording.start(wrapper, 1.0))
+    for index in range(extra_harness_writes):
+        mark(recording.add(wrapper, "file_write", 1.1 + index * 0.001, path=f"C:\\Temp\\module{index}.psm1"))
+    recording.start(test, 2.0)
+    recording.add(test, "registry_set", 2.1, registry_key=RUN_KEY)
+    recording.add(test, "network_connect", 2.2, dest_ip="192.0.2.1", dest_port=80)
+    recording.stop(test, 2.5)
+    mark(recording.stop(wrapper, 3.0))
+    mark(recording.start(cleanup, 4.0))
+    mark(recording.add(cleanup, "registry_delete", 4.1, source="sysmon", registry_key=RUN_KEY))
+    mark(recording.stop(cleanup, 4.5))
+    return recording, harness_ids
+
+
+def write_with_parts(folder: Path, recording: Recording, harness_ids: set[str], part_column: bool = True,
+                     background_ids: frozenset = frozenset(), part_override: dict | None = None) -> Path:
+    folder = write_session(folder, recording, labels=False)
+    rows = []
+    for event in recording.events:
+        harness = event["event_id"] in harness_ids
+        background = event["event_id"] in background_ids
+        part = "harness" if harness else "background" if background else "none" if event["source"] == "fim" else "test"
+        row = {
+            "event_id": event["event_id"],
+            "label": "none" if event["source"] == "fim" else "malicious" if part == "test" else "benign",
+            "technique": "T1547.001" if part == "test" else "",
+            "pool": "training-technique", "session_id": "s-1", "network": "host-only",
+        }
+        if part_column:
+            row["part"] = (part_override or {}).get(event["event_id"], part)
+        rows.append(row)
+    with (folder / "labels.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    return folder
+
+
+def test_without_a_part_column_the_wrapper_is_counted_as_the_test(tmp_path):
+    recording, harness = harness_recording()
+    rows = extract_session(write_with_parts(tmp_path / "s", recording, harness, part_column=False))
+    wrapper_tree = by_root(rows)[150]
+    assert wrapper_tree["n_file_write"] == 300  # the wrapper's work, described as the technique's
+    assert wrapper_tree["max_depth"] == 1
+    assert {row["harness_excluded"] for row in rows} == {0}
+
+
+def test_with_a_part_column_features_describe_the_test_only(tmp_path):
+    recording, harness = harness_recording()
+    rows = extract_session(write_with_parts(tmp_path / "s", recording, harness))
+    assert sorted(by_root(rows)) == [200]  # no tree for the wrapper or the cleanup
+    test = rows[0]
+    assert test["n_file_write"] == 0
+    assert test["n_processes"] == 1 and test["max_depth"] == 0 and test["n_children_of_root"] == 0
+    assert test["n_registry_set"] == 1 and test["n_network_connect"] == 1
+    assert test["observed_start"] == 1  # its parent has no start event left, so it is the root
+    assert test["label"] == "malicious" and test["harness_excluded"] == 1
+
+
+def test_changing_the_harness_changes_no_feature(tmp_path):
+    small, harness_small = harness_recording(extra_harness_writes=3)
+    large, harness_large = harness_recording(extra_harness_writes=800)
+    a = extract_session(write_with_parts(tmp_path / "a", small, harness_small))
+    b = extract_session(write_with_parts(tmp_path / "b", large, harness_large))
+    assert feature_values(a) == feature_values(b)
+
+
+def test_events_of_other_parts_are_kept(tmp_path):
+    recording, harness = harness_recording()
+    noise = recording.add(P(700, 1, "C:\\Windows\\notepad.exe"), "file_write", 2.0,
+                          path="C:\\Users\\lab\\Documents\\a.txt")
+    rows = extract_session(write_with_parts(tmp_path / "s", recording, harness,
+                                            background_ids=frozenset({noise["event_id"]})))
+    assert sorted(by_root(rows)) == [200, 700]
+    assert by_root(rows)[700]["label"] == "benign"
+    assert by_root(rows)[700]["n_document_file_events"] == 1
+
+
+def test_an_unknown_part_stops_rather_than_guesses(tmp_path):
+    recording, harness = harness_recording()
+    odd = {next(iter(harness)): "cleanup"}
+    folder = write_with_parts(tmp_path / "s", recording, harness, part_override=odd)
+    with pytest.raises(SessionError, match="unknown part"):
+        extract_session(folder)
+
+
+def test_a_session_that_is_all_harness_is_an_error(tmp_path):
+    recording, harness = harness_recording()
+    folder = write_with_parts(tmp_path / "s", recording, set(e["event_id"] for e in recording.events))
+    with pytest.raises(SessionError, match="harness"):
+        extract_session(folder)
+
+
+# FIM clock skew, as seen in the first real recordings
+
+
+@pytest.mark.parametrize(("skew", "linked"), [(-0.045, 1), (-0.5, 1), (-0.6, 0), (0.0, 1), (100.0, 1), (130.0, 0)])
+def test_fim_links_within_the_skew_and_the_window(tmp_path, skew, linked):
+    """`skew` is FIM's time minus the writer's. Negative means FIM was stamped first."""
+    recording = Recording()
+    edge = P(9608, 1392, "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe")
+    recording.add(edge, "registry_delete", 6.099, source="sysmon", registry_key=RUN_KEY)
+    recording.fim(6.099 + skew, kind="removed", registry_key=RUN_KEY)
+    rows = extract_session(write_session(tmp_path / "s", recording, labels=False))
+    assert sum(int(r["n_fim_changes_linked"]) for r in rows) == linked
+
+
+def test_the_nearest_write_wins_when_two_trees_write_the_same_item(tmp_path):
+    recording = Recording()
+    recording.add(P(200, 1, "C:\\a.exe"), "registry_set", 5.0, registry_key=RUN_KEY)
+    recording.add(P(201, 1, "C:\\b.exe"), "registry_delete", 6.099, source="sysmon", registry_key=RUN_KEY)
+    recording.fim(6.054, kind="removed", registry_key=RUN_KEY)
+    rows = by_root(extract_session(write_session(tmp_path / "s", recording, labels=False)))
+    assert (rows[200]["n_fim_changes_linked"], rows[201]["n_fim_changes_linked"]) == (0, 1)
+
+
+def test_the_real_edge_pair_links_both_changes_to_edge(tmp_path):
+    from tests.test_behaviour import edge_autolaunch
+    rows = extract_session(write_session(tmp_path / "s", edge_autolaunch(), labels=False))
+    assert [(int(r["root_pid"]), r["n_fim_changes_linked"]) for r in rows] == [(9608, 2)]
+
+
+def test_etw_and_fim_may_spell_a_key_with_different_case(tmp_path):
+    recording = Recording()
+    recording.add(P(200, 1, "C:\\a.exe"), "registry_set", 5.0, registry_key=RUN_KEY.replace("Software", "SOFTWARE"))
+    recording.fim(5.0, registry_key=RUN_KEY)
+    assert extract_session(write_session(tmp_path / "s", recording, labels=False))[0]["n_fim_changes_linked"] == 1
+
+
 # Reading sessions
 
 

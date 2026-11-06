@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 
 SESSION_FIELDS = ("session_id", "pool", "batch", "network")
 FIM_LINK_SECONDS = 120.0  # FIM's polling backup runs every 60 seconds
+# FIM and the writer's own event are stamped by different clocks. In the first real
+# recordings FIM's "removed" came 45 ms before the Sysmon delete that caused it.
+FIM_SKEW_SECONDS = 0.5
+PARTS = {"test", "harness", "background", "none", ""}
 BURST_SECONDS = 30.0
 FILE_BURST_SECONDS = 10.0
 FILE_EVENTS = ("file_create", "file_write", "file_rename", "file_delete")
@@ -42,7 +46,7 @@ WRITE_EVENTS = (*FILE_EVENTS, "registry_set", "registry_delete")
 
 METADATA_COLUMNS = [
     "session_id", "tree_id", "root_pid", "pool", "batch", "label", "technique", "network",
-    "activity", "observed_start", "n_events", "n_malicious_events",
+    "activity", "observed_start", "harness_excluded", "n_events", "n_malicious_events",
 ]
 FEATURE_COLUMNS = [
     # Shape of the tree
@@ -144,8 +148,32 @@ def load_session(folder: Path) -> tuple[dict, list[dict], dict[str, dict]]:
     if path.is_file():
         with path.open(encoding="utf-8", newline="") as stream:
             labels = {row["event_id"]: row for row in csv.DictReader(stream)}
+    session["_harness_excluded"] = int(bool(labels) and "part" in next(iter(labels.values())))
+    if session["_harness_excluded"]:
+        events = drop_harness(events, labels, folder)
+    else:
+        if labels:
+            log.warning(
+                "%s: labels.csv has no part column, so the wrapper that runs each test is counted "
+                "as the test. These rows must not be used for training.", folder.name,
+            )
     events.sort(key=order_key)
     return session, events, labels
+
+
+def drop_harness(events: list[dict], labels: dict[str, dict], folder: Path) -> list[dict]:
+    """The wrapper that runs a test is not the technique, so features must not describe it.
+    Dropping its events before trees are built also removes it from the tree shape: the
+    test's own process becomes the root, because its parent no longer has a start event."""
+    unknown = {row.get("part") for row in labels.values()} - PARTS
+    if unknown:
+        raise SessionError(f"{folder}: labels.csv has unknown part values {sorted(map(str, unknown))}")
+    kept = [e for e in events if (labels.get(e["event_id"]) or {}).get("part") != "harness"]
+    if len(kept) != len(events):
+        log.info("%s: %d harness event(s) left out", folder.name, len(events) - len(kept))
+    if not kept:
+        raise SessionError(f"{folder}: no events are left after leaving out the harness")
+    return kept
 
 
 def is_etw(event: dict, kind: str) -> bool:
@@ -229,7 +257,8 @@ def count_event(stats: TreeStats, event: dict, when: float) -> None:
 
 
 def link_fim(events: list[dict], trees: dict[Proc, TreeStats]) -> None:
-    """A FIM change is linked to the tree that last wrote that exact item just before it.
+    """A FIM change is linked to the tree whose write to that exact item is nearest in time:
+    up to 120 seconds before it, or 0.5 seconds after it to allow for clock skew.
     FIM doesn't know who made a change, so this is the only link there is."""
     found: dict[str, list[tuple[float, int, TreeStats]]] = {}
     for number, stats in enumerate(trees.values()):
@@ -244,9 +273,15 @@ def link_fim(events: list[dict], trees: dict[Proc, TreeStats]) -> None:
         if name not in writers:
             continue
         when = parse_ts(event["ts"]).timestamp()
-        index = bisect.bisect_right(times[name], when) - 1
-        if index >= 0 and when - times[name][index] <= FIM_LINK_SECONDS:
-            writers[name][index][2].counts["fim_linked"] += 1
+        after = bisect.bisect_right(times[name], when)
+        candidates = [
+            index for index in (after - 1, after)
+            if 0 <= index < len(times[name])
+            and -FIM_SKEW_SECONDS <= when - times[name][index] <= FIM_LINK_SECONDS
+        ]
+        if candidates:
+            nearest = min(candidates, key=lambda index: abs(when - times[name][index]))
+            writers[name][nearest][2].counts["fim_linked"] += 1
 
 
 def build_trees(events: list[dict], owner: dict[str, Proc], labels: dict[str, dict]) -> dict[Proc, TreeStats]:
@@ -343,6 +378,7 @@ def extract_session(folder: Path) -> list[dict]:
                 "network": session["network"],
                 "activity": session.get("activity") or "",
                 "observed_start": int(stats.root.start_observed),
+                "harness_excluded": session["_harness_excluded"],
                 "n_events": stats.n_events,
                 "n_malicious_events": stats.n_malicious,
                 **feature_row(stats),

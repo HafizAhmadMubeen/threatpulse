@@ -137,3 +137,35 @@ Everything above is unchanged. These come from `detection/behaviour.py`, `rules/
 | A, `agent/` | Check that FIM writes a registry key the same way as ETW. `triage/features.py` links FIM changes to writers by exact key |
 | A, `policy/` | The LSASS allowlist belongs in the policy engine. The behaviour rule has none |
 | A, `policy/` | Treat `layer: fim` alerts with `subject.pid` 0 like any other no-process alert |
+
+---
+
+# Added after the first real recordings (batch 1)
+
+From `track-b/rules`, after replaying batch 1 through the rules and features. Same rule as above: wait for `track-a/atomic` to merge.
+
+## PLANNING.md
+
+1. **Section 6, Gate 3 or Section 10:** record how the labels are used.
+   - `Features and evaluation use the test part of each attack session only. The Invoke-AtomicTest wrapper (harness) is excluded from training and evaluation, because it does far more work than the technique and would become a spurious correlation (Arp et al. 2022).`
+   - `Trees are built after the harness is removed, so the test's own process is the root.`
+2. **Section 4.3 (accepted limits):** add `Short-lived processes often have no command line (null): up to 8 of 21 process starts in one test session, and 10 of 59 in a benign one. Rules that need a command line can miss them.`
+3. **Section 4.3 or Section 9:** add `A file event can have no path: 22,663 and 7,089 in the two benign sessions of batch 1. Zone rules and features can't place those events.` Please check the numbers against `agent_summary.txt` before using them.
+4. **Section 8.3 (metrics), "False positives":** batch 1 gave 3 rule alerts in two benign sessions, all from Edge rewriting its own autolaunch Run value. The policy engine's persistence rule would restore it until an analyst approves it. Say so as a known false positive.
+5. **Section 10 Decided:** `| FIM link | A fim_change is linked to the nearest write to the same item, up to 120 s before or 0.5 s after, because FIM and Sysmon use different clocks |`.
+6. **Section 10 Decided:** the batch 1 results do not change any rule threshold, and say why: the benign sessions have no document activity to tune against. Thresholds are chosen after the zipping and admin benign sessions are recorded.
+
+## PHASES.md
+
+1. **Step 2.4 or 2.6:** `labels.csv` gains a `part` column (`test`, `harness`, `background`). `triage/features.py` requires it for rows to be used in training and writes `harness_excluded` to say if it was present.
+2. **Step 2.7:** the Gate 3 line "each rule fires on its Atomic test": met in batch 1 for T1547.001 (both tests), T1003.001, T1059.001, T1486, T1053.005 and T1218.011. T1003.001 is caught only by the command-line rule, because LSA protection hides the read. T1105 and T1685 are in later batches.
+3. **Step 3.4:** train only on rows with `harness_excluded` 1, filter on `observed_start`, split by `session_id`.
+
+## For Track A (agent and FIM)
+
+1. **FIM doesn't watch `RunOnceEx`.** Atomic T1547.001 test 2 writes `HKLM\...\RunOnceEx\0001\Depend\1`. The behaviour rule caught it, but FIM reported 0 changes, so the persistence zone's restore would not have run. This is the one gap between the rules and FIM. `agent/fim/README.md` lists only Run and RunOnce.
+2. **FIM timestamps can come before the writer's event.** FIM's "removed" was stamped 45 ms before the Sysmon delete that caused it. Anything that orders FIM and writer events must allow for about half a second.
+3. **ETW and Sysmon spell registry keys with different case** (`HKCU\SOFTWARE\...` vs `HKCU\Software\...`). Any code that compares keys must ignore case.
+4. **The cleanup process deletes the test folder with the same behaviour as the attack.** It fires the ransomware rule too. It should be labelled `harness`.
+5. **Edge's autolaunch value** (`MicrosoftEdgeAutoLaunch_*`) is removed and re-added by Edge itself. FIM sees both. The approved-change list will need an entry for it, or the policy will restore it.
+6. **An open question for the labels:** v2 labels didn't exist yet when this was written, so `part` values other than `test`, `harness`, `background` and empty will stop `triage/features.py` with an error. Tell me if there are more.

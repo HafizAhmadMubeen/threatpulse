@@ -110,7 +110,31 @@ uv run python -m detection.replay events.jsonl fim.jsonl
 - **One alert per action.** ETW and Sysmon both report registry writes, so rules raise one alert per process and key. Sensors give each event type a different source, so some rules use either.
 - **No allowlist here.** Many Windows components read LSASS. The policy engine owns the allowlist and starts in learning mode.
 
-**All rule thresholds are starting guesses.** Nothing has been tested against benign recordings yet, so the false-positive rate is unknown. Gate 3 (PLANNING.md Section 6) asks for each rule to be checked on the benign sessions.
+**All rule thresholds are starting guesses.** Gate 3 (PLANNING.md Section 6) asks for each rule to be checked on the benign sessions. The first real recordings (batch 1, two benign sessions of about 11 minutes) are too few to set any threshold: see "First real recordings" below.
+
+### First real recordings
+
+`python -m detection.session_report <session folders> --out data/runs/<name>` replays sessions and reports which rules fire. It reads the sessions and never writes inside them. `data/runs/` is not committed, because the repo is public.
+
+Batch 1 had 7 attack sessions and 2 benign ones (one of each pool was held out: T1053.005 and T1218.011).
+
+| Result | Detail |
+|---|---|
+| Every technique was detected | By the technique's own processes, never by the `Invoke-AtomicTest` wrapper |
+| T1003.001 | Detected by `R-T1003-002` only. There was no LSASS `process_access` event in any session, as LSA protection predicts |
+| T1547.001 #2 | `RunOnceEx\0001\Depend\1`, caught by the existing `RunOnceEx` entry. **FIM saw nothing**, because it doesn't watch that key |
+| T1486 | The rule fires on the 10th delete. A second alert comes from the cleanup that removes the test folder afterwards, which deletes the same 25 files |
+| Benign false positives | 3, all in one session: Edge removed and re-added its own autolaunch Run value 140 ms apart. FIM saw both changes, and `R-T1547-001` fired once |
+| Benign document activity | **Unknown.** No file event with a path was in a document folder, but 22,663 and 7,089 file events in the two sessions had no path at all, so they can't be placed in any zone |
+
+**What the data changed**
+- **Duplicate alerts:** ETW wrote `HKCU\SOFTWARE\...` and Sysmon wrote `HKCU\Software\...` for the same key, so one action gave two alerts. De-duplication now ignores case.
+- **Command lines are often null:** 2 of 94 and 10 of 59 process starts in the benign sessions, and up to 8 of 21 in a test session. `reg.exe` had a null command line in one test. Rules that don't use the command line still fired.
+
+**What it can't tell us yet**
+- `R-T1486-001`'s threshold is untouched. The benign sessions have no document-folder deletes or renames with a path, but no one was working on documents, so they say nothing about a lower threshold. And a file event with no path can't be counted by any zone rule or feature. The same count over all paths reaches 145 and 286 deletes or renames in 30 seconds (Edge's cache), which is why the rule only counts document folders. Choose the threshold after the benign sessions with zipping and admin work are recorded.
+- `R-T1105-001` had no data: its test needs NAT and is in a later batch. No benign process made a connection from a listed program either.
+- The two held-out sessions only confirm that those two rules fire. They were not used to change anything.
 
 **Known limits**
 - A ransomware that stops after 9 files is not caught by `R-T1486-001`. Our own T1486 script writes 25.

@@ -377,7 +377,10 @@ class RuleEngine:
             self.procs.setdefault(pid, ProcInfo(image, ppid))
 
     def _group(self, rule: Rule, names: tuple[str, ...], event: dict) -> tuple:
-        return (rule.id, *(repr(field_value(event, name, self.procs)) for name in names))
+        """Ignores case, because ETW writes HKCU\\SOFTWARE\\... where Sysmon writes
+        HKCU\\Software\\... for the same key (seen in the first real recordings)."""
+        values = (field_value(event, name, self.procs) for name in names)
+        return (rule.id, *(repr(v.lower() if isinstance(v, str) else v) for v in values))
 
     def _evaluate(self, rule: Rule, event: dict, when: float) -> list[str] | None:
         """Returns the evidence event IDs if the rule fires on this event."""
