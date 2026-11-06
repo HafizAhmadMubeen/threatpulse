@@ -496,7 +496,7 @@ def policy_data() -> dict:
 def test_the_shipped_policy_loads_and_has_the_planned_rules():
     assert [rule.id for rule in POLICY.rules] == [
         "P1-lsass-read", "P2-persistence-change", "P2b-persistence-origin",
-        "P3-ransomware", "P4-exfil", "P5-kill-request", "P6-delete-request"]
+        "P3-ransomware", "P3b-ransomware-entropy", "P4-exfil", "P5-kill-request", "P6-delete-request"]
     assert POLICY.thresholds == {"auto_contain": 0.80, "request_kill": 0.95, "alert": 0.50}
     assert POLICY.lsass_mode == "learning" and POLICY.default == ("alert_only",)
     assert POLICY.fim_debounce_seconds == 2.0

@@ -33,6 +33,7 @@ This step only **plans**. `execute()` is a later step. Nothing here touches Wind
 | `P2-persistence-change` | Persistence zone, and the change is not known to be approved | `restore`, only if the item still differs from the baseline after the debounce |
 | `P2b-persistence-origin` | Persistence zone and a risk score of at least `auto_contain` | `suspend` the highest-risk live process in the writer's tree |
 | `P3-ransomware` | Documents zone and a risk score of at least `auto_contain` | `suspend` |
+| `P3b-ransomware-entropy` | Documents zone and `rule_id` `R-T1486-002` (a delete burst plus encrypted-looking output, `detection/ransom.py`). No risk score needed | `suspend`, never-suspend still applies. `R-T1486-001` alone stays `alert_only` |
 | `P4-exfil` | `network_connect` and a risk score of at least `auto_contain` | `block_network` |
 | `P5-kill-request` | The process is already suspended and the risk score is at least `request_kill` | `request_kill` (awaits the analyst) |
 | `P6-delete-request` | `alert.layer` is `signature` | `request_delete` (awaits the analyst) |

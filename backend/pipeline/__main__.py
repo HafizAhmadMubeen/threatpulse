@@ -1,4 +1,4 @@
-"""python -m backend.pipeline <session folder>... --out <dir> [--labels <dir>] [--scan-files]
+"""python -m backend.pipeline <session folder>... --out <dir> [--labels <dir>] [--scan-files] [--read-files]
 
 Replays recorded sessions. It only reads the session folders and refuses an --out inside
 one. Real recordings must go to a gitignored folder such as data/runs/.
@@ -12,6 +12,7 @@ from pathlib import Path
 
 from backend.pipeline.output import write_merged, write_session
 from backend.pipeline.run import run_session
+from detection.entropy import FileSampler
 
 
 def expand(folders: list[Path]) -> list[Path]:
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="labels folder, for the summary only. Repeat it: the first folder with a session wins")
     parser.add_argument("--scan-files", action="store_true",
                         help="also run scan_file on process images that exist on this machine (for the VM)")
+    parser.add_argument("--read-files", action="store_true",
+                        help="read the document files a delete burst's process wrote, to tell ransomware "
+                             "output from an archiver's (for the lab VM; files outside the documents zone "
+                             "and links are never read)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
@@ -55,7 +60,8 @@ def main(argv: list[str] | None = None) -> int:
           file=sys.stderr)
     results, summaries = [], []
     for folder in sessions:
-        result = run_session(folder, scan_files=args.scan_files)
+        result = run_session(folder, scan_files=args.scan_files,
+                             sampler=FileSampler() if args.read_files else None)
         summary = write_session(result, folder, out, args.labels)
         results.append((result, folder))
         summaries.append(summary)

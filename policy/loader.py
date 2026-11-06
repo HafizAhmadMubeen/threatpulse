@@ -31,9 +31,10 @@ TOP_LEVEL = (
 # `when` keys the engine knows how to evaluate, and what each value must look like.
 CONDITIONS = (
     "event_type", "zone", "layer", "access_includes", "in_lsass_allowlist",
-    "change_approved", "risk_score_gte", "already_suspended",
+    "change_approved", "risk_score_gte", "already_suspended", "rule_id",
 )
 RULE_ID = re.compile(r"^P[0-9]+[a-z]?-[a-z0-9-]+$")
+RULE_NAME = re.compile(r"^R-[A-Z0-9]+-[A-Z0-9]+$")
 
 
 class PolicyError(ValueError):
@@ -135,6 +136,8 @@ def parse_condition(rule_id: str, key: str, value: object) -> object:
         fail(f"{where}: unknown layer {value!r}")
     if key == "access_includes" and not (isinstance(value, str) and value):
         fail(f"{where}: expected an access right name")
+    if key == "rule_id" and not (isinstance(value, str) and RULE_NAME.match(value)):
+        fail(f"{where}: expected a detection rule ID such as R-T1486-002")
     if key in ("in_lsass_allowlist", "change_approved", "already_suspended") and not isinstance(value, bool):
         fail(f"{where}: expected true or false")
     if key == "risk_score_gte" and not (value in THRESHOLDS or (is_number(value) and 0 <= value <= 1)):

@@ -139,6 +139,14 @@ describe('severity', () => {
   const alert = (layer: Alert['layer'], zone: Alert['object']['zone'], risk_score: number | null) =>
     ({ layer, risk_score, object: { zone } }) as Alert
 
+  it('ranks R-T1486-002 as Confirmed whatever its score, and R-T1486-001 by its score', () => {
+    const rule = (rule_id: string, risk_score: number | null) =>
+      ({ layer: 'rule', rule_id, risk_score, object: { zone: 'documents' } }) as Alert
+    expect(severityOf(rule('R-T1486-002', null))).toBe('Confirmed')
+    expect(severityOf(rule('R-T1486-002', 0.1))).toBe('Confirmed')
+    expect(severityOf(rule('R-T1486-001', null))).toBe('Not scored')
+  })
+
   it.each<[Alert['layer'], Alert['object']['zone'], number | null, Severity]>([
     ['signature', 'none', 0.12, 'Confirmed'],
     ['signature', 'none', null, 'Confirmed'],

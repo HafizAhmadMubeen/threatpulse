@@ -66,7 +66,17 @@ def summarise(result: SessionResult, labels: dict[str, dict], labels_used: str) 
         "alerts_by_rule": dict(sorted(Counter(a["rule_id"] for a in alerts).items())),
         "decisions_by_rule": dict(sorted(Counter(r for d in decisions for r in d["policy_rules"]).items())),
         "actions": dict(sorted(Counter(f"{a['action']}:{a['status']}" for a in actions).items())),
+        "entropy": {
+            "reader": "on" if result.entropy_reader else "off",
+            "bursts_by_verdict": result.entropy_verdicts,
+            "files_not_read": result.entropy_refused,
+        },
         "notes": {
+            "entropy": (
+                "files were read: R-T1486-002 can be raised" if result.entropy_reader else
+                "no file reader (replay outside the lab VM): every R-T1486-001 burst is 'unknown', "
+                "so R-T1486-002 is never raised"
+            ),
             "scorer": "STUB: score_process returns None, so every risk_score is null",
             "report_writer": "STUB: no LLM call",
             "suspended_pids": "always empty: nothing is executed, decisions stay pending",

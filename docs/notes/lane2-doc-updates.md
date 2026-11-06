@@ -253,3 +253,32 @@ Apply after `track-a/atomic` and `track-a/policy-engine` merge.
 1. **Label the batch 2 T1486 cleanup as `harness`** if not done: batch 1 v3 has it and batch 2 v2 shows the same pattern (a `harness` alert in each T1486 session).
 2. **The benign zip session fires `R-T1486-001`.** Please keep zip and extract sessions in the benign set: they are the only data that tells the ransomware rule from an archiver.
 3. **FIM's `baseline.json` for each session** would let the replay use the real baseline instead of the approximation. Export it with the recording if it is cheap.
+
+# Added on `track-b/entropy` (ransomware entropy, R-T1486-002)
+
+Apply after `track-a/atomic`, `track-a/policy-engine` and `track-c/orchestrator` merge. The `rules/policy.yaml` change (P3b) was authorised by the repository lead for this task.
+
+## PLANNING.md
+1. **Section 5.6 (`rules/policy.yaml`):** add rule `P3b-ransomware-entropy`: `when: { zone: documents, rule_id: R-T1486-002 }`, `actions: [suspend]`. It needs no risk score. Never-suspend still applies. `R-T1486-001` alone stays `alert_only`. The loader gains the `rule_id` condition.
+2. **Section 5.6 text, P3:** "write rate + entropy" is now built as a delete burst (`R-T1486-001`) plus a file-entropy verdict (`detection/ransom.py`). `R-T1486-002` is a rule ID raised by the pipeline, not by the rule engine, because it needs to read files.
+3. **Section 4.1 / 5.4 report rule:** `R-T1486-002` counts as high-risk (like Confirmed), whatever the score.
+4. **Section 10, Decided:** `| Ransomware entropy | Suspect file: entropy >= 7.5 bits/byte and no matching file header. Verdict high: >= 5 sampled files and >= 80% suspect (low: <= 20%). Only high raises R-T1486-002. Starting guesses, unmeasured |`; `| Entropy reads | Documents zone only, no links, regular files only, 64 MiB / 512 byte file limits, 100 files and 16 MiB per 10 s. Live or in the VM only: replay outside the VM is always "unknown" |`.
+5. **Section 4.3 / 7 (limits):** ransomware with low-entropy output, a forged matching header, partial encryption, or delete-only (wiper) stays at `R-T1486-001`. Files an extractor deletes before they are read stay "unknown".
+6. **Section 8.3 (evaluation):** the benign zip false positive (batch 2 run 3) is handled by the verdict only if files are read in the VM. It is not verified on real data from WSL.
+
+## CLAUDE.md
+7. **Protected zones, documents row:** "own detector (write rate + entropy)" now means `R-T1486-001` plus `R-T1486-002`.
+
+## PHASES.md
+8. **Step 3.1:** `P3b` added. **Step 3.9:** `--read-files` flag. **Step 4.x:** run the VM checks in `detection/VM_TEST_PLAN.md` ("Ransomware entropy").
+
+## ROADMAP.md
+9. **Section 2, Alert conventions:** rule ID `R-T1486-002` (layer `rule`, `risk_score` null, raised by the pipeline). **Section 2, `decide`:** `when` can test `rule_id`.
+
+## For the frontend
+10. Done on this branch: `severityOf` ranks `R-T1486-002` as Confirmed (matches `is_confirmed` in `backend/rag/prompt.py`).
+
+## For Track A
+1. Make the T1486 test script write at least 512 bytes per output file, or the verdict stays unknown.
+2. Run the VM steps in `detection/VM_TEST_PLAN.md` and send back the entropy numbers.
+3. Keep zip/extract sessions in the benign set, and record one where the extracted files stay on disk.
