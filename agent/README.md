@@ -315,7 +315,7 @@ The third check tests the chain's root key rather than the `signer` name, becaus
 
 The `\Device\...` path entries remove pipes, the console and similar devices, which are not files on disk. They are also left out of the coverage figures.
 
-Keep filters narrow. A filter that covers a protected zone, such as documents or Run keys, blinds the agent there. There is deliberately no filter for `HKLM\SOFTWARE\Microsoft\Windows Defender\`: tampering with that key is part of held-out technique T1562.001, and Defender's own writes are already covered by the process filter.
+Keep filters narrow. A filter that covers a protected zone, such as documents or Run keys, blinds the agent there. There is deliberately no filter for `HKLM\SOFTWARE\Microsoft\Windows Defender\`: tampering with that key is part of held-out technique T1685, and Defender's own writes are already covered by the process filter.
 
 After editing `config/filters.json`, rebuild to copy it next to the program, or pass it with `--config`. Use the same filters for every recording in a dataset.
 

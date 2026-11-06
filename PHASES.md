@@ -95,7 +95,7 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 |---|---|---|---|
 | 2.1 | A | Add network events, and read Sysmon Event IDs 3, 10, 12 and 13 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read`. Event IDs 12 and 13 give full registry paths where ETW can't name a key | LSASS access shows as a `process_access` event with decoded rights. A Run key write shows as a `registry_set` event with `source: sysmon` and the full key |
 | 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce keys, startup folders and the hosts file, created before the `atomic-ready` snapshot. Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup. Changes emit `fim_change` events to `fim.jsonl` | Editing the hosts file produces a `fim_change` event |
-| 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`). Take snapshot **`atomic-ready`** | `Invoke-AtomicTest T1547.001 -ShowDetails` works |
+| 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`), pinned as in "Step 2.3 order of work" below. Take snapshot **`atomic-ready`**. Then run Atomic T1003.001 to close the LSASS check | `Invoke-AtomicTest T1547.001 -ShowDetails` works. T1003.001 gives a `process_access` event on `lsass.exe` with `vm_read` |
 | 2.4 | A | Recording script: start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script: events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo | One labelled log file per test |
 | 2.5 | A | Record benign sessions, including "noisy" normal activity: install/uninstall software, Windows Update, admin PowerShell, zipping files | Agreed number of benign sessions recorded |
 | 2.6 | A | After **each** recording: export procedure (stop everything → enable `vm-export` → copy only `.jsonl`/`.csv` → disable → roll back to `atomic-ready`) | Logs present on the host. VM back to snapshot |
@@ -105,6 +105,33 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 | 2.10 | C | Download ATT&CK STIX data (`enterprise-attack.json`), split into one document per technique, embed into ChromaDB | Number of techniques loaded matches the file |
 | 2.11 | C | Retrieval tests with plain-language queries | "process reads LSASS memory" → T1003.001 in top results |
 | 2.12 | C | Dashboard pages for decisions, reports and FIM change approval, using sample data | Pages render |
+
+### Step 2.3 order of work
+
+Everything here happens inside the VM, and a person runs every Atomic test. Use 64-bit PowerShell, opened as administrator.
+
+1. Finish the open checks in `agent/README.md`, with NAT on.
+2. Add the Defender exclusion before downloading anything, otherwise Defender may quarantine files during the install. It belongs to `atomic-ready` only, not `clean-baseline`:
+   ```powershell
+   Add-MpPreference -ExclusionPath 'C:\AtomicRedTeam'
+   ```
+3. Install pinned versions, because the tests behind a recorded dataset must not change:
+   ```powershell
+   Install-Module -Name powershell-yaml -Scope CurrentUser -Force
+   git clone --depth 1 --branch v2.3.0 https://github.com/redcanaryco/invoke-atomicredteam.git C:\AtomicRedTeam\invoke-atomicredteam
+   git clone --filter=blob:none --no-checkout https://github.com/redcanaryco/atomic-red-team.git C:\AtomicRedTeam\atomic-red-team
+   git -C C:\AtomicRedTeam\atomic-red-team checkout edb5039ae07216bf322fdba07b6f686d7c088a03
+   New-Item -ItemType Junction -Path C:\AtomicRedTeam\atomics -Target C:\AtomicRedTeam\atomic-red-team\atomics
+   Import-Module C:\AtomicRedTeam\invoke-atomicredteam\Invoke-AtomicRedTeam.psd1 -Force
+   ```
+4. Check the install: `Invoke-AtomicTest T1547.001 -ShowDetails` must work.
+5. With NAT still on, run `Invoke-AtomicTest <technique> -TestNumbers <numbers> -GetPrereqs` for each test in PLANNING.md 8.1.
+6. Confirm the FIM baseline: run `main.py watch` briefly and expect `Changes reported: 0`. If Windows changed something legitimate, deliberately replace the baseline now.
+7. Shut down, set the network to host-only, and take snapshot **`atomic-ready`**. It now holds the baseline and the tools.
+8. Close the LSASS check from the snapshot, with the agent running: T1003.001 test #2 (`-ShowDetails`, then the test, then `-Cleanup`). If Defender blocks the dump, the check still passes as long as the event appears. Don't turn Defender off to get a dump. If no event appears, check `RunAsPPL`, then use the fallback in PLANNING.md Section 9.
+9. Export only the `.jsonl` logs and roll back to `atomic-ready`. Never copy a dump out of the VM.
+
+**Network:** NAT for steps 1 to 6. Recordings are host-only, except T1105, which needs NAT.
 
 **→ Gate 2**
 

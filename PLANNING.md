@@ -455,21 +455,24 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
 
 ### 8.1 Test techniques (agree in Phase 0)
 
-Proposed list. **Before finalising, confirm each Atomic technique has a Windows test in the Atomic Red Team repository.**
+Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `edb5039` and ATT&CK 20.1. Test numbers apply to that commit, because they can shift between commits.
 
 | Technique | Name | Zone / layer | Test material | Train or held-out |
 |---|---|---|---|---|
-| T1547.001 | Registry Run Keys / Startup Folder | Persistence | Atomic | Train |
-| T1003.001 | OS Credential Dumping: LSASS Memory | LSASS | Atomic | Train |
-| T1059.001 | PowerShell | Behaviour | Atomic | Train |
-| T1105 | Ingress Tool Transfer | Network | Atomic | Train |
+| T1547.001 | Registry Run Keys / Startup Folder | Persistence | Atomic #1 Reg Key Run, #2 Reg Key RunOnce | Train |
+| T1003.001 | OS Credential Dumping: LSASS Memory | LSASS | Atomic #2 comsvcs.dll | Train |
+| T1059.001 | PowerShell | Behaviour | Atomic #17 PowerShell Command Execution | Train |
+| T1105 | Ingress Tool Transfer | Network | Atomic #29 `iwr` download. Needs NAT | Train |
 | T1486 | Data Encrypted for Impact | Documents | **Our own** harmless script, encrypting copies of dummy files in a test folder | Train |
-| T1053.005 | Scheduled Task | Behaviour / persistence | Atomic | **Held-out** |
-| T1562.001 | Impair Defenses: Disable or Modify Tools | Behaviour | Atomic | **Held-out** |
-| T1218.011 | System Binary Proxy Execution: Rundll32 | Behaviour | Atomic | **Held-out** |
+| T1053.005 | Scheduled Task | Behaviour / persistence | Atomic #2 Scheduled task Local | **Held-out** |
+| T1685 | Disable or Modify Tools | Behaviour | Atomic #51 Tamper with Windows Defender Registry - Reg.exe | **Held-out** |
+| T1218.011 | System Binary Proxy Execution: Rundll32 | Behaviour | Atomic #9 Launches an executable using Rundll32 and pcwutl.dll | **Held-out** |
 | (manual) | Hosts file modification | FIM | Manual edit in VM | FIM test only |
 | (EICAR) | Standard antivirus test file | Signatures | EICAR, VM only | Signature test only |
 | (UPX) | Packed harmless program | Heuristics | UPX (open-source packer), VM only | Heuristic test only |
+
+- **T1685 replaces T1562.001, and stays held-out.** The source is the `revoked-by` relationship from T1562.001 to T1685 in the ATT&CK 20.1 STIX data. Atomic Red Team moved its tests to T1685 in its ATT&CK v19 migration.
+- **Never run T1685 tests #14 or #15.** They unload and uninstall Sysmon, which would blind our own sensors.
 
 ### 8.2 Protected-zone demos
 
