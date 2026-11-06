@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import label_session
+import make_batch_plan
 from label_session import LabelError
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "recording_tests.json"
@@ -31,7 +32,7 @@ def attack_session(**changes):
     session = {
         "session_id": "s1",
         "label": "malicious",
-        "split": "train",
+        "pool": "training-technique",
         "technique": "T1547.001",
         "network": "host-only",
         "root_pid": ROOT,
@@ -154,10 +155,10 @@ def test_benign_session_labels_everything_benign(tmp_path):
     assert set(labels_by_id(tmp_path).values()) == {"benign"}
 
 
-def test_rows_carry_the_network_mode_and_split(tmp_path):
-    write_session(tmp_path, attack_session(network="nat", split="held-out"), [event(2, "process_start", ROOT)])
+def test_rows_carry_the_network_mode_and_pool(tmp_path):
+    write_session(tmp_path, attack_session(network="nat", pool="held-out"), [event(2, "process_start", ROOT)])
     row = label_session.label_session(tmp_path)[0]
-    assert (row["network"], row["split"], row["technique"]) == ("nat", "held-out", "T1547.001")
+    assert (row["network"], row["pool"], row["technique"]) == ("nat", "held-out", "T1547.001")
 
 
 def test_main_writes_labels_csv(tmp_path, monkeypatch):
@@ -174,8 +175,8 @@ def config():
 
 def test_recording_plan_matches_the_decided_numbers():
     tests = config()["tests"]
-    assert sum(test["runs"] for test in tests if test["split"] == "train") == 30
-    assert sum(test["runs"] for test in tests if test["split"] == "held-out") == 9
+    assert sum(test["runs"] for test in tests if test["pool"] == "training-technique") == 30
+    assert sum(test["runs"] for test in tests if test["pool"] == "held-out") == 9
     assert (config()["benign"]["sessions"], config()["benign"]["nat_sessions"]) == (15, 5)
 
 
@@ -195,3 +196,89 @@ def test_atomic_tests_have_numbers_and_scripts_have_files():
             assert isinstance(test["number"], int)
         else:
             assert (tools / test["script"]).exists()
+
+
+def load_plan():
+    return json.loads((CONFIG.parents[1] / "tools" / "batch_plan.json").read_text(encoding="utf-8"))
+
+
+def plan_sessions():
+    return [session for batch in load_plan()["batches"] for session in batch["sessions"]]
+
+
+def test_committed_plan_matches_its_seed():
+    assert make_batch_plan.build_plan(config()["tests"]) == load_plan()
+
+
+def test_plan_covers_every_session_once():
+    sessions = plan_sessions()
+    assert len(sessions) == 54
+    for test in config()["tests"]:
+        runs = [session["run"] for session in sessions if session["test_id"] == test["id"]]
+        assert sorted(runs) == list(range(1, test["runs"] + 1))
+    benign = sorted(session["run"] for session in sessions if session["test_id"] == "benign")
+    assert benign == list(range(1, 16))
+
+
+def test_plan_benign_activity_mix():
+    activities = [session.get("activity") for session in plan_sessions() if session["test_id"] == "benign"]
+    assert {activity: activities.count(activity) for activity in set(activities)} == {
+        "normal-use": 3,
+        "install-uninstall": 3,
+        "windows-update": 3,
+        "admin-powershell": 3,
+        "zip-files": 3,
+    }
+
+
+def test_plan_network_modes_match_the_tests():
+    allowed = {test["id"]: test["network"] for test in config()["tests"]}
+    nat_benign = 0
+    for batch in load_plan()["batches"]:
+        for session in batch["sessions"]:
+            if session["test_id"] == "benign":
+                nat_benign += batch["network"] == "nat"
+            else:
+                assert allowed[session["test_id"]] == batch["network"]
+    assert nat_benign == config()["benign"]["nat_sessions"]
+
+
+def test_plan_runs_each_host_only_test_once_per_batch():
+    for batch in load_plan()["batches"]:
+        if batch["network"] == "host-only":
+            attacks = [session["test_id"] for session in batch["sessions"] if session["test_id"] != "benign"]
+            assert len(attacks) == len(set(attacks))
+
+
+def test_plan_gives_t1685_a_batch_of_its_own():
+    with_t1685 = [
+        batch for batch in load_plan()["batches"]
+        if any(session["test_id"] == "T1685-51" for session in batch["sessions"])
+    ]
+    assert len(with_t1685) == 3
+    assert all(len(batch["sessions"]) == 1 for batch in with_t1685)
+
+
+def test_plan_runs_system_changing_activities_last():
+    late = ("install-uninstall", "windows-update")
+    for batch in load_plan()["batches"]:
+        seen_late = False
+        for session in batch["sessions"]:
+            if session.get("activity") in late:
+                seen_late = True
+            else:
+                assert not seen_late
+
+
+def test_plan_gives_each_windows_update_its_own_boot():
+    for batch in load_plan()["batches"]:
+        activities = [session.get("activity") for session in batch["sessions"]]
+        assert activities.count("windows-update") <= 1
+
+
+def test_plan_mixes_benign_and_attack_in_most_batches():
+    mixed = 0
+    for batch in load_plan()["batches"]:
+        kinds = {session["test_id"] == "benign" for session in batch["sessions"]}
+        mixed += len(kinds) == 2
+    assert mixed == 8

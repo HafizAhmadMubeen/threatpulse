@@ -104,7 +104,7 @@ def label_session(folder: Path) -> list[dict]:
             "event_id": event["event_id"],
             "label": label,
             "technique": session["technique"] if label == "malicious" else "",
-            "split": session["split"],
+            "pool": session["pool"],
             "session_id": session["session_id"],
             "network": session["network"],
         }

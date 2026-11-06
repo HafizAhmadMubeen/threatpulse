@@ -19,7 +19,7 @@ HKCU and the per-user startup folder belong to whoever runs FIM, so always run i
 
 ## Create the baseline
 
-The baseline is the approved state. Create it on a clean system, **before the `atomic-ready` snapshot in step 2.3**, so that every rollback restores it.
+The baseline is the approved state. Create it on a clean system, **before the `atomic-ready-2` snapshot in step 2.3**, so that every rollback restores it.
 
 From `C:\ThreatPulseLab\threatpulse`:
 

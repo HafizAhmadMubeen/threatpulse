@@ -182,14 +182,21 @@ These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A p
 | Script | Job |
 |---|---|
 | `tools/start_lab_sensors.ps1` | Starts the agent and FIM together, and stops both cleanly. Used for every recording and demo |
+| `tools/run_batch.ps1` | Runs one batch from `tools/batch_plan.json` in its fixed order, and pauses before each manual benign session |
 | `tools/record_session.ps1` | Records one session, and writes `session.json` |
 | `tools/vm_t1486_script.ps1` | Our harmless T1486 test, on dummy files only |
+| `tools/vm_benign_admin.ps1`, `tools/vm_benign_zip.ps1` | Scripted benign activities |
+| `tools/make_batch_plan.py` | Generated `batch_plan.json`, from a recorded seed |
 | `tools/label_session.py` | Writes `labels.csv` for one session |
 | `config/recording_tests.json` | The only tests that may be recorded, with their runs and network mode |
 
 Each session gets its own folder under `C:\ThreatPulseLab\logs\sessions\`, holding `events.jsonl`, `fim.jsonl`, `session.json` and both sensors' summaries.
 
 `record_session.ps1` refuses a test that isn't on the list, an Atomic install that isn't the pinned commit, and a `-Network` value that doesn't match what the VM can reach. Cleanup runs as a separate process after the end time, so it's never labelled as the attack.
+
+Each session also has to pass a clean-start check: if FIM reports a change from the baseline before the session begins, the recording stops. This only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
+
+`pool` in `session.json` says which group of techniques a session belongs to. It isn't the train/test split, which is made later by session.
 
 ## How it works
 

@@ -1,18 +1,21 @@
 # Records one session: sensors on, one test or one benign period, sensors off, session.json.
 # A person starts this inside the lab VM, in a 64-bit PowerShell opened as administrator.
 #
-#   record_session.ps1 -TestId T1547.001-1 -Run 1 -Network host-only
+#   record_session.ps1 -TestId T1547.001-1 -Run 1 -Network host-only [-Batch 1 -Order 1]
 #   record_session.ps1 -TestId benign -Run 1 -Network nat -Activity normal-use [-Minutes 10]
 #
-# It only runs what agent/config/recording_tests.json lists, so the T1685 tests that remove
-# Sysmon can't run through it. Roll back to atomic-ready after each recording (step 2.6).
+# run_batch.ps1 calls this for each session of a batch. It only runs what
+# agent/config/recording_tests.json lists, so the T1685 tests that remove Sysmon can't run
+# through it. Roll back to atomic-ready-2 after each batch (step 2.6).
 
 param(
     [Parameter(Mandatory)][string]$TestId,
     [Parameter(Mandatory)][int]$Run,
     [Parameter(Mandatory)][ValidateSet('host-only', 'nat')][string]$Network,
     [string]$Activity,
-    [int]$Minutes = 0
+    [int]$Minutes = 0,
+    [int]$Batch = 0,  # 0 means a trial, outside the batch plan
+    [int]$Order = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,10 +105,24 @@ $endUtc = $null
 try {
     Start-Sleep -Seconds $SettleSeconds
 
+    # FIM compares with the baseline when it starts, so anything in its log by now means
+    # the persistence zone isn't clean. This can't see Defender's state or scheduled tasks.
+    if ((Get-Item (Join-Path $sessionDir 'fim.jsonl')).Length -gt 0) {
+        throw "Clean-start check failed: FIM reported changes before the session began. See $sessionDir\fim.jsonl"
+    }
+
     if ($benign) {
+        $activityScript = $config.benign.scripted.$Activity
         $startUtc = Get-UtcStamp
-        "Recording benign session ($Activity) for $Minutes minutes. Do the activity now."
-        Start-Sleep -Seconds ($Minutes * 60)
+        if ($activityScript) {
+            "Recording benign session ($Activity). This runs by itself for $Minutes minutes."
+            $process = Start-TestProcess @('-File', "`"$(Join-Path $PSScriptRoot $activityScript)`"", '-Minutes', $Minutes)
+            $process.WaitForExit()
+        } else {
+            "Recording benign session ($Activity) for $Minutes minutes. Do the activity now."
+            Start-Sleep -Seconds ($Minutes * 60)
+            "Stop the activity now."
+        }
         $endUtc = Get-UtcStamp
     } else {
         $getArguments = if ($test.kind -eq 'atomic') { ${function:Get-AtomicArguments} } else { ${function:Get-ScriptArguments} }
@@ -132,7 +149,9 @@ $session = [ordered]@{
     session_id    = $sessionId
     test_id       = $TestId
     label         = if ($benign) { 'benign' } else { 'malicious' }
-    split         = if ($benign) { 'unassigned' } else { $test.split }  # sessions are split later
+    pool          = if ($benign) { 'unassigned' } else { $test.pool }  # the train/test split comes later
+    batch         = $Batch
+    order         = $Order
     technique     = if ($benign) { $null } else { $test.technique }
     test_number   = if ($benign -or $test.kind -ne 'atomic') { $null } else { $test.number }
     activity      = if ($benign) { $Activity } else { $null }

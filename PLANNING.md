@@ -61,7 +61,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 2. Download the **Windows 11 Enterprise Evaluation** ISO (free from the Microsoft Evaluation Center). The evaluation runs **90 days**. After that, the VM is rebuilt from the ISO using the setup guide.
 3. VM size: **6 GB RAM, 4 CPU cores, 80 GB dynamic disk.** Store the VM and ISO on the drive with the most free space (not C: if C: is nearly full).
 4. Install inside the VM: Sysmon with the **`sysmon-modular`** config (see Section 4.2), Python 3.12, Git, and later Atomic Red Team.
-5. **Take a snapshot called `clean-baseline`.** Roll back to it after every attack simulation.
+5. **Take a snapshot called `clean-baseline`.** Roll back to a snapshot after every attack simulation, except recording batches, which roll back after each batch (Section 10).
 
 **If WSL2 is installed on the host:** VMware and VirtualBox both run alongside it, so don't turn any Windows features on or off for this project. Run `wsl --shutdown` before heavy VM testing to free RAM.
 
@@ -74,7 +74,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
   2. Enable a shared folder named `vm-export`.
   3. Copy **only** `.jsonl` and `.csv` log files, `session.json`, and the agent and FIM summary `.txt` files into it.
   4. Disable the shared folder.
-  5. Roll back the snapshot.
+  5. Roll back the snapshot. For recordings, this export and rollback happen once per batch.
 
   Never copy executables, scripts, archives or memory dumps out of the VM.
 - **EICAR:** the repo stores only its hash and YARA rule, never the file itself. Create the EICAR file only inside the VM. On the host, use a harmless test-marker file instead (a plain text file containing `THREATPULSE-TEST-MARKER`). Never add Defender exclusions on the host.
@@ -527,13 +527,15 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | FIM location | Python module in the agent track, running in the VM |
 | FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
 | Recording plan | 5 runs per training test: T1547.001 #1 and #2, T1003.001 #2, T1059.001 #17, T1105 #29 and the T1486 dummy-file script, 30 in total. 3 runs per held-out test: T1053.005 #2, T1685 #51 and T1218.011 #9, 9 in total. 15 benign sessions of about 10 minutes, mixing normal use, install/uninstall, Windows Update, admin PowerShell and zipping files |
+| Recording batches | The 54 sessions run in 11 batches, listed with a fixed random order in `agent/tools/batch_plan.json`. Each batch boots from `atomic-ready-2`, mixes benign and attack sessions, and ends with one export and a rollback. Each session starts only if FIM reports no change from the baseline. T1685 #51 gets its own batch every time, because it tampers with Defender's settings, which FIM can't see |
+| Dataset fields | `session.json` records `pool` (`training-technique`, `held-out` or `unassigned`), `batch` and `order`. `pool` is not the train/test split, which is made later by session, and may keep whole batches together because sessions from one boot share state |
 | Network mode in the dataset | About 5 of the 15 benign sessions are recorded with NAT on, so network mode doesn't correlate with the label (spurious correlation, Arp et al. 2022). Each session records its network mode in `session.json` |
 | Labels | A separate `labels.csv` keyed by `event_id`, because the Event schema allows no extra fields |
 | Sensor stop | `start_lab_sensors.ps1` stops the agent and FIM through named Windows events, the same clean stop as Ctrl+C. It never kills them |
 | FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. The restore action first saves what it is about to undo in `C:\ThreatPulseLab\fim\quarantine\`, and approval puts that back. Registry: the full value and its type (`reg_type`). Files: a copy of the changed file. `target.change.new_value` is for display only, because it is cut to 1024 characters and has no type. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
 | API | Approve and reject take the body `{"reviewed_by", "action"}`, per action. New `GET /fim/changes`. API response schemas live in `contracts/schemas/api/` |
 | FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
-| FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready` snapshot |
+| FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready-2` snapshot |
 | Path coverage targets | 100% for the test or attack process and the documents zone (met: 127 of 127). At least 95% for all processes started after the agent (met: 97.9%). The remaining 3 writes are accepted |
 | Event sources for ML | Counts and rates use `source: etw` only, so one action is never counted twice. Sysmon events give zone signals, which may be used as features: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13). Detection rules may use either source |
 | Ransomware zone | Controlled Folder Access **and** own detector |
