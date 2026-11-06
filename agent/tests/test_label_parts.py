@@ -164,3 +164,79 @@ def test_the_plan_has_one_extra_run_at_the_end_of_batch_5():
     extras = [session for session in batch["sessions"] if session.get("extra")]
     assert [(s["test_id"], s["run"]) for s in extras] == [("T1547.001-2", 6)]
     assert batch["sessions"][-1] == extras[0]
+
+
+# The -Cleanup process is started by the recording script, which also started the test's
+# root, so both have the same parent. record_session.ps1 runs it after the end time.
+RECORDER = 500
+CLEANUP_ROOT = 4000
+AFTER_END = 40  # seconds; the test ends at 30
+
+
+def cleanup_run(pid=CLEANUP_ROOT, cmdline="powershell -File x.ps1 -Cleanup", ppid=RECORDER):
+    root = event(AFTER_END, "process_start", pid, ppid=ppid, image=POWERSHELL)
+    root["process"]["cmdline"] = cmdline
+    return {
+        "root": root,
+        "delete": event(AFTER_END + 1, "file_delete", pid),
+        "child": event(AFTER_END + 1, "process_start", 4001, ppid=pid, image=SYSTEM32 + "conhost.exe"),
+        "child_write": event(AFTER_END + 2, "file_write", 4001),
+    }
+
+
+def test_the_cleanup_tree_of_our_own_script_is_harness(tmp_path):
+    test_root = event(2, "process_start", ROOT, ppid=RECORDER, image=POWERSHELL)
+    test_write = event(3, "file_write", ROOT)
+    cleanup = cleanup_run()
+    write_session(tmp_path, attack_session(), [test_root, test_write, *cleanup.values()])
+    parts = parts_by_id(tmp_path)
+    assert parts[test_write["event_id"]] == ("malicious", "test")
+    for name, item in cleanup.items():
+        assert parts[item["event_id"]] == ("malicious", "harness"), name
+
+
+def test_the_cleanup_tree_of_an_atomic_test_is_harness(tmp_path):
+    run = wrapped_run()
+    run["root"]["ppid"] = RECORDER
+    cleanup = cleanup_run()
+    write_session(tmp_path, atomic_session(), [*run.values(), *cleanup.values()])
+    parts = parts_by_id(tmp_path)
+    assert {parts[item["event_id"]] for item in cleanup.values()} == {("malicious", "harness")}
+    assert parts[run["shell_write"]["event_id"]] == ("malicious", "test")
+
+
+def test_a_recorded_cleanup_pid_picks_the_cleanup(tmp_path):
+    test_root = event(2, "process_start", ROOT, ppid=RECORDER, image=POWERSHELL)
+    test_write = event(3, "file_write", ROOT)
+    cleanup = cleanup_run(cmdline=None)
+    other = cleanup_run(pid=4500)  # another PowerShell from the recording script, not the cleanup
+    other_list = list(other.values())
+    session = attack_session(cleanup_root_pid=CLEANUP_ROOT)
+    write_session(tmp_path, session, [test_root, test_write, *cleanup.values(), *other_list])
+    parts = parts_by_id(tmp_path)
+    assert parts[cleanup["delete"]["event_id"]] == ("malicious", "harness")
+    assert parts[other["root"]["event_id"]] == ("benign", "background")
+
+
+def test_a_powershell_after_the_end_without_the_cleanup_flag_is_background(tmp_path):
+    test_root = event(2, "process_start", ROOT, ppid=RECORDER, image=POWERSHELL)
+    test_write = event(3, "file_write", ROOT)
+    cleanup = cleanup_run(cmdline="powershell -File something_else.ps1")
+    write_session(tmp_path, attack_session(), [test_root, test_write, *cleanup.values()])
+    assert parts_by_id(tmp_path)[cleanup["delete"]["event_id"]] == ("benign", "background")
+
+
+def test_a_sibling_started_before_the_end_is_not_the_cleanup(tmp_path):
+    test_root = event(2, "process_start", ROOT, ppid=RECORDER, image=POWERSHELL)
+    test_write = event(3, "file_write", ROOT)
+    early = event(10, "process_start", 4100, ppid=RECORDER, image=POWERSHELL)
+    early["process"]["cmdline"] = "powershell -Cleanup"
+    early_write = event(11, "file_write", 4100)
+    write_session(tmp_path, attack_session(), [test_root, test_write, early, early_write])
+    assert parts_by_id(tmp_path)[early_write["event_id"]] == ("benign", "background")
+
+
+def test_a_session_without_cleanup_still_labels(tmp_path):
+    test_root = event(2, "process_start", ROOT, ppid=RECORDER, image=POWERSHELL)
+    write_session(tmp_path, attack_session(), [test_root, event(3, "file_write", ROOT)])
+    assert {part for _, part in parts_by_id(tmp_path).values()} == {"test"}

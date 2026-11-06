@@ -192,23 +192,23 @@ These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A p
 
 Each session gets its own folder under `C:\ThreatPulseLab\logs\sessions\`, holding `events.jsonl`, `fim.jsonl`, `session.json` and both sensors' summaries.
 
-`record_session.ps1` refuses a test that isn't on the list, an Atomic install that isn't the pinned commit, and a `-Network` value that doesn't match what the VM can reach. Cleanup runs as a separate process after the end time, so it's never labelled as the attack.
+`record_session.ps1` refuses a test that isn't on the list, an Atomic install that isn't the pinned commit, and a `-Network` value that doesn't match what the VM can reach. Cleanup runs as a separate process after the end time. Its tree is labelled `harness`, because the cleanup of the T1486 script deletes the same 25 files the test just encrypted and looks exactly like the attack.
 
-After the sensors start, each session waits 10 seconds to settle and then 60 seconds to warm up (`-WarmupSeconds`), and records `warmup_seconds` in `session.json`. It then has to pass a clean-start check: if FIM reports a change from the baseline by then, the recording stops. If a harmless rewrite such as Edge's Run value trips it, run the batch again from that session with `-FromOrder`. The check only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
+After the sensors start, each session waits 10 seconds to settle and then 60 seconds to warm up (`-WarmupSeconds`), and records `warmup_seconds` and, from batch 3, `warmup_end_utc` in `session.json`. **Track B computes features from `start_utc`, the test start, so what happens during the warm-up, such as the `WmiApSrv.exe` bursts below, is not counted.** The sessions per batch come from `tools/batch_plan.json`, and `run_batch.ps1` prints the count. Only a benign activity that isn't scripted pauses for a person: batch 2 had 9 sessions and no pause. It then has to pass a clean-start check: if FIM reports a change from the baseline by then, the recording stops. If a harmless rewrite such as Edge's Run value trips it, run the batch again from that session with `-FromOrder`. The check only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
 
 `pool` in `session.json` says which group of techniques a session belongs to. It isn't the train/test split, which is made later by session.
 
-From batch 2, `session.json` has no byte order mark. Batch 1's files have one and no `warmup_seconds`, so read them with `encoding="utf-8-sig"`, which works for both, and treat a missing `warmup_seconds` as 0.
+From batch 2, `session.json` has no byte order mark. Batch 1's files have one and no `warmup_seconds`, so read them with `encoding="utf-8-sig"`, which works for both, and treat a missing `warmup_seconds` as 0. `warmup_end_utc` and `cleanup_root_pid` are in the files from batch 3 on, and are missing from batches 1 and 2. `agent_commit` is the repository commit on the VM, not the build of the agent: all 11 batches use the one binary built before `process.microsoft_root` was added, and the VM only pulls script changes until Phase 4.
 
 **Labels and parts.** `label_session.py` writes one row per event: `event_id`, `label`, `part`, `technique`, `pool`, `session_id`, `network` and `warmup_seconds`.
 
 | `part` | Which events |
 |---|---|
 | `test` | The test's own processes. For an Atomic test, the process the `Invoke-AtomicTest` wrapper starts to run it, and everything below it. For our T1486 script, the whole tree |
-| `harness` | The wrapper itself: the root PowerShell and the `hostname`, `whoami` and `conhost` it starts |
+| `harness` | The wrapper itself (the root PowerShell and the `hostname`, `whoami` and `conhost` it starts) and the whole cleanup tree: the `-Cleanup` process that `record_session.ps1` starts after the test, for every test, and everything below it |
 | `background` | Everything else, including every event in a benign session |
 
-`label` is still the tree label, so the wrapper's events are `malicious` there. **Track B must compute all features, including tree shape, from the `test` part only, and leave the `harness` part out of training and evaluation.** Every Atomic session runs the wrapper and no benign session does, so a model that sees it learns the wrapper instead of behaviour, and held-out results would look better than they are.
+`label` is still the tree label, so the wrapper's and the cleanup's events are `malicious` there. **Track B must compute all features, including tree shape, from the `test` part only, and leave the `harness` part out of training and evaluation.** Every Atomic session runs the wrapper and no benign session does, so a model that sees it learns the wrapper instead of behaviour, and held-out results would look better than they are.
 
 To label exported data without touching it:
 
@@ -216,7 +216,7 @@ To label exported data without touching it:
 cd agent && uv run python tools/label_session.py --batch <exported batch folder> --out <new folder>
 ```
 
-`--out` never overwrites a `labels.csv`, and `--batch` needs it. The test part of T1003.001 is only about 2 events. The split depends on the processes the wrapper starts, so check it again if Atomic Red Team or the wrapper is updated.
+`--out` never overwrites a `labels.csv`, and `--batch` needs it. The current label folders are `batch-01-labels-v3` and `batch-02-labels-v2`; the earlier ones (`-v2`, `batch-02-labels`) left the cleanup as `background` and are superseded. The cleanup tree is found by `cleanup_root_pid` when `session.json` has it, and otherwise as the PowerShell that starts after `end_utc` with the same parent as the test's root and `-Cleanup` in its command line. The test part of T1003.001 is only about 2 events. The split depends on the processes the wrapper starts, so check it again if Atomic Red Team or the wrapper is updated.
 
 **Installers for the `install-uninstall` sessions.** They sit in `C:\ThreatPulseLab\installers` inside the `atomic-ready-3` snapshot, downloaded with NAT on from the publishers' own sites. The hashes are what the VM computed with `Get-FileHash`. They haven't been compared with a publisher's checksum.
 
@@ -336,6 +336,7 @@ A child process writing through a handle its parent opened gets a null path. A s
 | `process.cmdline` | Null when the process exited before it could be read. ETW delivers events up to about a second late, so this is common for short-lived processes such as `reg.exe` |
 | `process.user`, `process.sha256`, `process.signer` | Null when they could not be read |
 | `process.signed` | True only for a verified signature. A failed check is false, so false does not prove a file is unsigned |
+| `process.microsoft_root` | Optional. The agent writes it on every event: true only when the signature verified and the certificate chain ends at a Microsoft root, otherwise false. Events recorded before this field existed, and `fim_change` events, don't have it. The agent's output validates only once Lane 2's schema change that allows the field is on the branch, because the schema forbids unknown fields |
 | `target.path` | Null when the name could not be proved, usually because the file was opened before the agent started. For `file_rename`, this is the new path. For `file_delete`, this is the deleted file |
 | `target.old_path` | Set only for `file_rename` |
 | `target.pid`, `target.access_mask`, `target.access_rights` | Set only for `process_access`. For example, `0x21410` decodes to `vm_read`, `query_information`, `query_limited_information` and `read_control`. A bit with no name appears as `unknown_0x...` |
@@ -486,6 +487,35 @@ Findings from batch 1. Each was decided afterwards, and PLANNING.md Section 10 r
 - **The attack processes have 2 or 3 writes with no path in every session** (3 of 106 for the T1486 script), so "100% for the test process" is missed. They are PowerShell's writes to its jump-list file, about 0.3 seconds after it starts. In session 3 they came a second before the first event under the test folder, and all 75 writes under it have a path.
 - **Registry key coverage in the attack sessions is 56.8% to 77.4%,** against 91.6% and 98.9% in the benign ones. A short session is dominated by the start of PowerShell and `cmd.exe`, so zone features built from ETW registry keys can undercount persistence there.
 - **The exit code is the wrapper's, not the technique's.** It was 0 for every attack session, including one where the technique's own command was denied.
+
+**Batch 2 of the dataset.** Recorded with `run_batch.ps1 -Batch 2` from `atomic-ready-3`, with the 60-second warm-up, exported, and checked read-only. Counts only. Events include the `fim_change` lines.
+
+| Session | Events | Test | Harness | Benign | None | Exit code | FIM changes |
+|---|---|---|---|---|---|---|---|
+| 1 T1486 script, run 2 | 9583 | 214 | 105 | 9264 | 0 | 0 | 0 |
+| 2 T1218.011 #9, run 2 | 2541 | 44 | 246 | 2251 | 0 | 0 | 0 |
+| 3 T1547.001 #2, run 2 | 1046 | 14 | 245 | 785 | 2 | 0 | 2 |
+| 4 T1547.001 #1, run 2 | 5236 | 14 | 243 | 4977 | 2 | 0 | 2 |
+| 5 benign `zip-files`, run 3 | 41120 | 0 | 0 | 41120 | 0 | | 0 |
+| 6 T1053.005 #2, run 2 | 953 | 12 | 247 | 694 | 0 | 0 | 0 |
+| 7 benign `admin-powershell`, run 4 | 7085 | 0 | 0 | 7085 | 0 | | 0 |
+| 8 T1059.001 #17, run 2 | 976 | 70 | 241 | 665 | 0 | 0 | 0 |
+| 9 T1003.001 #2, run 2 | 1202 | 2 | 289 | 911 | 0 | 0 | 0 |
+
+| Check | Result |
+|---|---|
+| `validate_events.py` | 0 invalid in all 9 `events.jsonl` files, and in both non-empty `fim.jsonl` files |
+| `Lost by ETW`, `Lost, queue full`, `Handler errors`, `Sysmon read errors` | 0 in all 9 |
+| `session.json` | No byte order mark. `warmup_seconds` 60 in all 9. The first event is 72 seconds before the test starts (12 in batch 1) |
+| Clean-start check | Passed for all 9 |
+| Test part | Same size as batch 1 for every test (T1003.001 still 2) |
+
+Findings from batch 2:
+
+- **The warm-up does not raise path coverage.** For processes started after the agent, file writes with a path were 91% to 94.6% in the attack sessions in both batches. Registry coverage moved both ways (T1218.011 56.8% to 71.4%, T1486 77.4% to 60.9%). T1218.011 run 2 fell to 58.1% because `taskhostw.exe` made 84 of 87 pathless writes, and T1486 run 2 to 84.6% because of `msedgewebview2.exe`. These are Windows tasks that start at any time. The warm-up stays for batches 2 to 11 for consistency.
+- **`WmiApSrv.exe` bursts.** T1486 run 2 and T1547.001 #1 run 2 each hold about 4,310 file writes from `WmiApSrv.exe` within a second, 58 and 30 seconds before the test starts, which is inside the warm-up. Batch 1's first benign session had the same burst. It is unrelated to the label, and features computed from `start_utc` don't count it.
+- **The cleanup looked like the attack.** Lane 2's real-data run showed the T1486 cleanup was labelled `background`. It is now `harness` in both batches, together with every other test's cleanup tree: 104 to 175 events per session, all within about 3 seconds after `end_utc`. Test counts did not change.
+- **FIM's own Python.** `python.exe` in the FIM virtual environment has 6 to 9 events with no path in every session of both batches, so it does not separate the labels.
 
 ## Questions to settle in the VM
 

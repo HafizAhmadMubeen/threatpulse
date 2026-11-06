@@ -100,7 +100,7 @@ def test_a_child_of_a_reused_parent_pid_is_benign(tmp_path):
     assert labels_by_id(tmp_path)[child["event_id"]] == "benign"
 
 
-def test_cleanup_is_not_labelled_as_the_attack(tmp_path):
+def test_a_process_after_the_end_with_another_parent_is_not_the_cleanup(tmp_path):
     root = event(2, "process_start", ROOT)
     root_stop = event(3, "process_stop", ROOT)
     cleanup = event(31, "process_start", 4000, ppid=900)

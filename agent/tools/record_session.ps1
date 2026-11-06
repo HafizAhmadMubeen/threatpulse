@@ -9,8 +9,10 @@
 # through it. Roll back to atomic-ready-3 after each batch (step 2.6).
 #
 # After the sensors start, the script waits for the settle time and then the warm-up, so
-# that the start of the sensors is over before the session begins. -WarmupSeconds is
-# recorded in session.json. Sessions recorded before the warm-up existed count as 0.
+# that the start of the sensors is over before the session begins. -WarmupSeconds and
+# warmup_end_utc are recorded in session.json. Sessions recorded before the warm-up existed
+# count as 0 seconds and have no warmup_end_utc. Track B computes features from start_utc, so
+# whatever happens during the warm-up is not counted.
 
 param(
     [Parameter(Mandatory)][string]$TestId,
@@ -105,6 +107,8 @@ $rootPid = $null
 $exitCode = $null
 $startUtc = $null
 $endUtc = $null
+$warmupEndUtc = $null
+$cleanupRootPid = $null
 
 & (Join-Path $PSScriptRoot 'start_lab_sensors.ps1') -Start -SessionDir $sessionDir
 try {
@@ -112,6 +116,7 @@ try {
     if ($WarmupSeconds -gt 0) {
         "Warming up for $WarmupSeconds seconds."
         Start-Sleep -Seconds $WarmupSeconds
+        $warmupEndUtc = Get-UtcStamp
     }
 
     # FIM compares with the baseline when it starts, so anything in its log by now means
@@ -145,8 +150,10 @@ try {
         $exitCode = $process.ExitCode
         $endUtc = Get-UtcStamp
 
-        # A separate process, after the end time, so cleanup is never labelled as the attack.
+        # A separate process, after the end time. Its pid is recorded, and label_session.py labels
+        # its whole tree as harness, because cleanup can look just like the attack.
         $cleanup = Start-TestProcess (& $getArguments $test -Cleanup)
+        $cleanupRootPid = $cleanup.Id
         $cleanup.WaitForExit()
     }
 
@@ -163,12 +170,14 @@ $session = [ordered]@{
     batch         = $Batch
     order         = $Order
     warmup_seconds = $WarmupSeconds
+    warmup_end_utc = $warmupEndUtc  # null when there was no warm-up
     technique     = if ($benign) { $null } else { $test.technique }
     test_number   = if ($benign -or $test.kind -ne 'atomic') { $null } else { $test.number }
     activity      = if ($benign) { $Activity } else { $null }
     run           = $Run
     network       = $Network
     root_pid      = $rootPid
+    cleanup_root_pid = $cleanupRootPid  # the -Cleanup process, labelled harness
     exit_code     = $exitCode
     start_utc     = $startUtc
     end_utc       = $endUtc

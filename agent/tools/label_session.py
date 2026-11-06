@@ -16,7 +16,10 @@ Each row has a label and a part:
                       Invoke-AtomicTest wrapper starts to run it, and everything below it.
                       For our own T1486 script, the whole tree.
           harness     the Atomic wrapper itself: the root PowerShell, and the hostname,
-                      whoami and conhost it starts. Never part of a real attack.
+                      whoami and conhost it starts. Also the cleanup process tree that
+                      record_session.ps1 starts after the test (-Cleanup), for every
+                      test. Never part of a real attack, and the cleanup of our T1486
+                      script deletes the same files the test just encrypted.
           background  everything else, including every event in a benign session.
 
 Train and evaluate on the test part against the background part, and leave the harness
@@ -45,6 +48,9 @@ ORDER_STOP = 2
 
 # Processes Invoke-AtomicTest starts for its own logging, before it runs the test.
 HARNESS_HELPERS = {"conhost.exe", "hostname.exe", "whoami.exe"}
+
+# Internal part of the cleanup tree. It is written out as "harness".
+CLEANUP = "cleanup"
 
 FIELDS = ["event_id", "label", "part", "technique", "pool", "session_id", "network", "warmup_seconds"]
 
@@ -78,6 +84,8 @@ def uses_harness(session: dict) -> bool:
 
 def child_part(event: dict, parent_part: str, root_pid: int, wrapped: bool) -> str:
     """The part of a process that starts under a process of the tree."""
+    if parent_part == CLEANUP:
+        return CLEANUP
     if not wrapped or parent_part == "test":
         return "test"
     # A child of the wrapper itself is a helper, or the process that runs the test.
@@ -88,12 +96,32 @@ def child_part(event: dict, parent_part: str, root_pid: int, wrapped: bool) -> s
     return "harness" if image in HARNESS_HELPERS else "test"
 
 
+def is_cleanup_root(event: dict, session: dict, root_ppid: int) -> bool:
+    """The PowerShell that record_session.ps1 starts for -Cleanup, after the test's end time.
+
+    It is a sibling of the test's root: the same parent, which is the recording script.
+    session.json has its pid from batch 3 on (cleanup_root_pid). Earlier sessions are found
+    by the parent, the image and the -Cleanup flag, because that is all the log holds.
+    """
+    if event["ts"] < session["end_utc"] or event["ppid"] != root_ppid:
+        return False
+    if ntpath.basename(event["process"]["image"]).lower() != "powershell.exe":
+        return False
+    recorded = session.get("cleanup_root_pid")
+    if recorded is not None:
+        return event["pid"] == recorded
+    cmdline = event["process"].get("cmdline")
+    return cmdline is None or "-cleanup" in cmdline.lower()  # a null cmdline: the process ended too soon to read it
+
+
 def label_attack_events(events: list[dict], session: dict) -> list[tuple[str, str]]:
     """One (label, part) per event, in the same order as `events`, which must be sorted."""
     root_pid = session["root_pid"]
     wrapped = uses_harness(session)
     tree: dict[int, str] = {}  # pid -> part, for the tree processes that are running now
     root_seen = False
+    root_ppid = None
+    cleanup_seen = False
     results = []
 
     for event in events:
@@ -106,7 +134,11 @@ def label_attack_events(events: list[dict], session: dict) -> list[tuple[str, st
             )
             if is_root:
                 root_seen = True
+                root_ppid = event["ppid"]
                 tree[pid] = "harness" if wrapped else "test"
+            elif root_seen and not cleanup_seen and is_cleanup_root(event, session, root_ppid):
+                cleanup_seen = True
+                tree[pid] = CLEANUP
             elif event["ppid"] in tree:
                 tree[pid] = child_part(event, tree[event["ppid"]], root_pid, wrapped)
             else:
@@ -115,7 +147,7 @@ def label_attack_events(events: list[dict], session: dict) -> list[tuple[str, st
         if event["source"] == "fim":
             results.append(("none", "background"))
         elif pid in tree:
-            results.append(("malicious", tree[pid]))
+            results.append(("malicious", "harness" if tree[pid] == CLEANUP else tree[pid]))
         else:
             results.append(("benign", "background"))
 
