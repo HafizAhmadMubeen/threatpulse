@@ -18,9 +18,9 @@
   ],
   "properties": {
     "alert_id": {
-      "description": "a-<counter, at least 4 digits>.",
+      "description": "a-<run start, UTC, yyyymmddThhmmss>-<counter, at least 6 digits>, the same format as event_id. Unique across runs, so a new alert can never inherit an old review.",
       "type": "string",
-      "pattern": "^a-[0-9]{4,}$"
+      "pattern": "^a-[0-9]{8}T[0-9]{6}-[0-9]{6,}$"
     },
     "ts": {
       "description": "UTC ISO 8601. Milliseconds are optional.",
@@ -40,13 +40,13 @@
       "uniqueItems": true
     },
     "risk_score": {
-      "description": "ML score of the subject's process tree, from score_process. Null means not scored, which never matches risk_score_gte.",
+      "description": "ML score of the subject's process tree, from score_process. Null means not scored, which never matches risk_score_gte. Static file analysis never goes here: see static_analysis.",
       "type": ["number", "null"],
       "minimum": 0,
       "maximum": 1
     },
     "event_type": {
-      "description": "Same values as Event.event_type.",
+      "description": "Same values as Event.event_type, plus file_scan for a scan with no triggering event.",
       "enum": [
         "process_start",
         "process_stop",
@@ -58,8 +58,29 @@
         "registry_set",
         "registry_delete",
         "network_connect",
-        "fim_change"
+        "fim_change",
+        "file_scan"
       ]
+    },
+    "static_analysis": {
+      "description": "What static file analysis found. For analysts and reports only: the policy engine ignores it, and it never feeds risk_score rules. The reasons can quote attacker-controlled file content, so they are telemetry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "reasons"],
+      "properties": {
+        "score": {
+          "description": "Heuristic score of the file, 0 to 1. Null for a signature match, which is a fact and not a score.",
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "reasons": {
+          "description": "Human-readable findings, or every method that matched a signature.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
     },
     "subject": {
       "type": "object",
@@ -75,6 +96,10 @@
         "signed": { "type": "boolean" },
         "signer": { "type": ["string", "null"] },
         "trusted_path": { "type": "boolean" },
+        "microsoft_root": {
+          "description": "True only when the agent verified the signature and the chain ends at a Microsoft root. Copied from the Event. Absent means unknown, which is not the same as false. The signer text is never used for this.",
+          "type": "boolean"
+        },
         "ancestors": {
           "description": "Nearest parent first.",
           "type": "array",

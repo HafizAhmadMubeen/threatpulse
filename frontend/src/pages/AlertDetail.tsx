@@ -31,6 +31,21 @@ function AlertFacts({ alert }: { alert: Alert }) {
       <dd><RiskScore alert={alert} /></dd>
       <dt>Rule</dt>
       <dd>{alert.rule_id}</dd>
+      {alert.static_analysis && (
+        <>
+          <dt>Static analysis</dt>
+          <dd>
+            {alert.static_analysis.score !== null && (
+              <div>Score {alert.static_analysis.score.toFixed(2)}</div>
+            )}
+            <ul className="plain">
+              {alert.static_analysis.reasons.map((reason, index) => (
+                <li key={index}><Telemetry value={reason} /></li>
+              ))}
+            </ul>
+          </dd>
+        </>
+      )}
       <dt>Techniques</dt>
       <dd>{alert.technique_ids.length > 0 ? alert.technique_ids.join(', ') : '—'}</dd>
       <dt>Process</dt>
@@ -173,14 +188,18 @@ function ReportView({ report }: { report: Report | null }) {
           )}
           <p className="report-text">{report.summary}</p>
           <h3>Techniques</h3>
-          <ul>
-            {report.techniques.map((technique) => (
-              <li key={technique.id}>
-                <strong>{technique.id} {technique.name}.</strong>{' '}
-                <span className="report-text">{technique.evidence}</span>
-              </li>
-            ))}
-          </ul>
+          {report.techniques.length === 0 ? (
+            <p className="muted">No ATT&CK technique applies to this alert.</p>
+          ) : (
+            <ul>
+              {report.techniques.map((technique) => (
+                <li key={technique.id}>
+                  <strong>{technique.id} {technique.name}.</strong>{' '}
+                  <span className="report-text">{technique.evidence}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <h3>Timeline</h3>
           <ol>
             {report.timeline.map((line, index) => (

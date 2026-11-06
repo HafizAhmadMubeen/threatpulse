@@ -22,6 +22,9 @@ EXPECTED_FAILURES = {
     "event_bad_event_id.json": ("event_id", "pattern"),
     "event_fim_change_without_change.json": ("target", "required"),
     "alert_bad_layer.json": ("layer", "enum"),
+    "alert_old_id_format.json": ("alert_id", "pattern"),
+    "alert_static_score_out_of_range.json": ("static_analysis/score", "maximum"),
+    "alert_static_analysis_without_reasons.json": ("static_analysis/reasons", "minItems"),
     "alert_risk_score_out_of_range.json": ("risk_score", "maximum"),
     "alert_bad_evidence_event_id.json": ("evidence_event_ids/0", "pattern"),
     "alert_unknown_subject_scored.json": ("risk_score", "type"),
@@ -33,6 +36,9 @@ EXPECTED_FAILURES = {
     "decision_skipped_without_reason.json": ("actions/1", "required"),
     "decision_review_fields_on_suspend.json": ("actions/0", "not"),
     "decision_awaiting_with_reviewer.json": ("actions/1", "not"),
+    "decision_pending_with_time.json": ("actions/0/executed_at", "type"),
+    "decision_request_kill_pending.json": ("actions/1/status", "enum"),
+    "decision_target_without_image.json": ("actions/0/target", "required"),
     "decision_rejected_without_reviewer.json": ("actions/1", "required"),
     "decision_executed_request_without_reviewer.json": ("actions/0", "required"),
     "decision_executed_without_time.json": ("actions/0/executed_at", "type"),
@@ -98,8 +104,24 @@ def test_cli_exit_code_for_unreadable_files(tmp_path):
     ("copied", "original"),
     [
         (
-            schema("alert")["properties"]["event_type"]["enum"],
+            [v for v in schema("alert")["properties"]["event_type"]["enum"] if v != "file_scan"],
             schema("event")["properties"]["event_type"]["enum"],
+        ),
+        (
+            schema("alert")["properties"]["alert_id"]["pattern"].replace("^a-", "^e-"),
+            schema("event")["properties"]["event_id"]["pattern"],
+        ),
+        (
+            schema("decision")["properties"]["decision_id"]["pattern"].replace("^d-", "^a-"),
+            schema("alert")["properties"]["alert_id"]["pattern"],
+        ),
+        (
+            schema("report")["properties"]["report_id"]["pattern"].replace("^r-", "^a-"),
+            schema("alert")["properties"]["alert_id"]["pattern"],
+        ),
+        (
+            api_schema("fim_change")["properties"]["alert_id"]["pattern"],
+            schema("alert")["properties"]["alert_id"]["pattern"],
         ),
         (
             schema("alert")["properties"]["evidence_event_ids"]["items"]["pattern"],
@@ -203,7 +225,7 @@ def test_generator_reproduces_the_committed_samples(tmp_path):
 
 @pytest.mark.parametrize("status", ["approved", "rejected"])
 def test_reviewed_action_needs_both_review_fields(validators, data, status):
-    decision = by_id(data["decisions"], "decision_id", "d-0007")
+    decision = by_id(data["decisions"], "decision_id", "d-20261105T093000-000007")
     action = decision["actions"][1]
     action.update(status=status, reviewed_by="lab-analyst", reviewed_at="2026-11-05T09:40:00.000Z")
     assert list(validators["decision"].iter_errors(decision)) == []
@@ -212,7 +234,7 @@ def test_reviewed_action_needs_both_review_fields(validators, data, status):
 
 
 def test_review_fields_survive_execution(data):
-    action = by_id(data["decisions"], "decision_id", "d-0001")["actions"][0]
+    action = by_id(data["decisions"], "decision_id", "d-20261105T093000-000001")["actions"][0]
     assert action["status"] == "executed"
     assert action["reviewed_by"] == "lab-analyst"
 
@@ -234,6 +256,20 @@ def test_prompt_injection_name_is_recorded_and_changes_nothing(data):
     report = by_id(data["reports"], "alert_id", alert["alert_id"])
     assert [a["action"] for a in decision["actions"]] == ["block_network"]
     assert INJECTION_NAME in report["summary"]
+
+
+def test_file_scan_sample_is_what_scan_file_returns_alone(data):
+    alert = next(a for a in data["alerts"] if a["event_type"] == "file_scan")
+    assert alert["subject"]["pid"] == 0
+    assert alert["risk_score"] is None
+    assert alert["evidence_event_ids"] == []
+    assert alert["static_analysis"]["score"] > 0
+
+
+def test_static_score_is_separate_from_the_ml_score(data):
+    alert = next(a for a in data["alerts"] if a["rule_id"] == "HEUR-UPX-PACKED")
+    assert alert["risk_score"] == 0.22
+    assert alert["static_analysis"]["score"] == 0.95
 
 
 def test_not_scored_is_kept_apart_from_a_low_score(data):
@@ -258,7 +294,7 @@ def test_not_scored_is_kept_apart_from_a_low_score(data):
         (lambda d: d["decisions"][3]["attributes"].__setitem__("risk_score", 0.1), "risk_score"),
         (lambda d: d["decisions"][3]["attributes"].__setitem__("zone", "none"), "zone"),
         (lambda d: d["decisions"][3]["attributes"].__setitem__("signed", False), "signed"),
-        (lambda d: d["reports"][0]["techniques"][0].__setitem__("id", "T9999"), "T9999"),
+        (lambda d: d["reports"][1]["techniques"][0].__setitem__("id", "T9999"), "T9999"),
         (lambda d: d["alerts"][0].__setitem__("event_type", "process_stop"), "no evidence event"),
         (lambda d: d["alerts"][0]["subject"].__setitem__("pid", 7), "subject pid"),
         (lambda d: d["alerts"][0]["subject"].__setitem__("image", "C:\\other.exe"), "image"),

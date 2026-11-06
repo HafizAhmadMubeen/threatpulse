@@ -1,0 +1,43 @@
+{
+  "alert_id": "a-20261105T093000-000002",
+  "ts": "2026-11-05T09:31:01.500Z",
+  "layer": "heuristic",
+  "rule_id": "HEUR-UPX-PACKED",
+  "technique_ids": [
+    "T1027.002"
+  ],
+  "risk_score": 0.22,
+  "event_type": "process_start",
+  "subject": {
+    "pid": 4280,
+    "image": "C:\\ThreatPulseLab\\samples\\hello_upx.exe",
+    "signed": false,
+    "signer": null,
+    "trusted_path": false,
+    "microsoft_root": false,
+    "ancestors": [
+      {
+        "pid": 4100,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      },
+      {
+        "pid": 3120,
+        "image": "C:\\Windows\\explorer.exe"
+      }
+    ]
+  },
+  "object": {
+    "zone": "none",
+    "path": "C:\\ThreatPulseLab\\samples\\hello_upx.exe",
+    "registry_key": null,
+    "access": [],
+    "file_sha256": "076a2fe3321be65321143420c611c88ddcac5ad582ff0223f918e3caa64b0e8b"
+  },
+  "evidence_event_ids": [
+    "e-20261105T093000-000005"
+  ],
+  "static_analysis": {
+    "score": 0.95,
+    "reasons": []
+  }
+}

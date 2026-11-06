@@ -109,6 +109,7 @@ tbody tr + tr td, tbody tr + tr th { border-top: 1px solid var(--border); }
 
 .risk { display: inline-flex; align-items: center; gap: 8px; }
 .score { font-variant-numeric: tabular-nums; }
+.static-score { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .badge {
   display: inline-block;

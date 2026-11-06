@@ -1,0 +1,19 @@
+# T1053.005 Scheduled Task (held-out technique).
+# The task later runs under the Task Scheduler service, outside the launcher's tree, so
+# this only sees the part that creates it (PLANNING.md Section 6, Gate 3).
+- id: R-T1053-001
+  title: Scheduled task created from the command line
+  description: schtasks.exe with /create, or PowerShell registering a scheduled task.
+  layer: rule
+  zone: none
+  techniques: [T1053.005]
+  dedupe_by: [pid]
+  detection:
+    selection:
+      - event_type: process_start
+        process.image|endswith: '\schtasks.exe'
+        process.cmdline|contains: '/create'
+      - event_type: process_start
+        process.image|endswith: ['\powershell.exe', '\pwsh.exe']
+        process.cmdline|contains: ['register-scheduledtask', 'new-scheduledtask']
+    condition: selection

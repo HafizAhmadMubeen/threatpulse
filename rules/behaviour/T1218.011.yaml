@@ -1,0 +1,18 @@
+# T1218.011 System Binary Proxy Execution: Rundll32 (held-out technique).
+# rundll32 is a signed Windows binary, so its trust says nothing. What it launches does.
+- id: R-T1218-001
+  title: rundll32 started a child process
+  description: >
+    A process started by rundll32.exe. The parent comes from the process table, so rundll32
+    must have been seen starting, or doing something, earlier in the stream.
+  layer: rule
+  zone: none
+  techniques: [T1218.011]
+  dedupe_by: [pid]
+  detection:
+    selection:
+      event_type: process_start
+      parent.image|endswith: '\rundll32.exe'
+    filter:
+      process.image|endswith: ['\conhost.exe', '\werfault.exe']
+    condition: selection and not filter

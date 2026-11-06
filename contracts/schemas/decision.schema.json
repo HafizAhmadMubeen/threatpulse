@@ -7,11 +7,11 @@
   "required": ["decision_id", "alert_id", "ts", "policy_rules", "actions", "attributes"],
   "properties": {
     "decision_id": {
-      "description": "d-<same counter as the alert>.",
+      "description": "d-<the alert's run start and counter>.",
       "type": "string",
-      "pattern": "^d-[0-9]{4,}$"
+      "pattern": "^d-[0-9]{8}T[0-9]{6}-[0-9]{6,}$"
     },
-    "alert_id": { "type": "string", "pattern": "^a-[0-9]{4,}$" },
+    "alert_id": { "type": "string", "pattern": "^a-[0-9]{8}T[0-9]{6}-[0-9]{6,}$" },
     "ts": {
       "description": "When the decision was made. UTC ISO 8601, milliseconds optional.",
       "type": "string",
@@ -68,6 +68,7 @@
         "automatic": { "type": "boolean" },
         "status": {
           "enum": [
+            "pending",
             "executed",
             "failed",
             "skipped",
@@ -75,6 +76,16 @@
             "approved",
             "rejected"
           ]
+        },
+        "target": {
+          "description": "The process this action is aimed at, when it acts on one (suspend, block_network, request_kill). The engine checks the never-suspend list against it, and the executor acts on it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pid", "image"],
+          "properties": {
+            "pid": { "type": "integer", "minimum": 1 },
+            "image": { "type": "string", "minLength": 1 }
+          }
         },
         "reason": {
           "description": "Required when the status is skipped or failed.",
@@ -112,7 +123,7 @@
           "else": {
             "properties": {
               "automatic": { "const": true },
-              "status": { "enum": ["executed", "failed", "skipped"] }
+              "status": { "enum": ["pending", "executed", "failed", "skipped"] }
             }
           }
         },
@@ -136,7 +147,7 @@
           "if": {
             "required": ["status"],
             "properties": {
-              "status": { "enum": ["skipped", "awaiting_approval", "approved", "rejected"] }
+              "status": { "enum": ["pending", "skipped", "awaiting_approval", "approved", "rejected"] }
             }
           },
           "then": {
