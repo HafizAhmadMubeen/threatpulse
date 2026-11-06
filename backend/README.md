@@ -54,7 +54,7 @@ The FIM route takes only `reviewed_by`. `{event_id}` is the `fim_change` event's
 
 ## How it works
 
-- **Approval records intent, and nothing else.** It sets `status`, `reviewed_by` and `reviewed_at`. Nothing is killed or deleted, and `backend/` never imports `policy/`. Connecting approval to `policy.execute` is step 4.6 in `PHASES.md`. That includes FIM approval, which will update the baseline and re-apply the change (`PLANNING.md` Section 10).
+- **Approval records intent, and nothing else.** It sets `status`, `reviewed_by` and `reviewed_at`. Nothing is killed or deleted, and the API modules (`app`, `views`, `data`, `store`) never import `policy/` or the pipeline. A test checks it. Only the offline pipeline (`backend/pipeline/`) imports `policy/`, to plan decisions. Connecting approval to `policy.execute` is step 4.6 in `PHASES.md`. That includes FIM approval, which will update the baseline and re-apply the change (`PLANNING.md` Section 10).
 - **Reviews are kept apart from the data.** They go in the review store, and are layered over an action still at `awaiting_approval`. Once a file shows the action has moved on, the file wins.
 - **Telemetry is data.** A record that is unreadable or fails its schema is skipped and counted in `skipped_records` in `/stats`, so one bad line can't take the dashboard down.
 - **`events_filtered_before_llm`** counts events that are not evidence for any reported alert.
@@ -75,3 +75,11 @@ The FIM route takes only `reviewed_by`. `{event_id}` is the `fim_change` event's
 - The browser protection above doesn't cover a program on the same machine. Any local process can call the API with no `Origin` header. That includes a test program approving its own Run key through `/fim/changes/{event_id}/approve`.
 - It's acceptable for now because approval triggers nothing and the API listens only on loopback. A token in `.env` wouldn't fix it, because the same lab user can read that file.
 - The store is for one server process. Don't run it with several workers.
+
+## Replaying a recording: `backend/pipeline/`
+
+PHASES.md step 3.9. It turns a recorded session into the files the API serves. See [pipeline/README.md](pipeline/README.md).
+
+```bash
+uv run python -m backend.pipeline <session or batch folder>... --out data/runs/<name> [--labels <labels folder>]
+```
