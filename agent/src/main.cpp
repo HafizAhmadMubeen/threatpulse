@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "agent_event.h"
+#include "enrich.h"
 #include "etw_session.h"
 #include "event_mapper.h"
 #include "filters.h"
@@ -92,12 +93,43 @@ std::string make_run_id() {
 void print_usage() {
     std::wcout << L"Usage: threatpulse_agent [--out <file>] [--config <filters.json>]\n"
                << L"                         [--no-close-events] [--rundown] [--no-sysmon]\n"
+               << L"       threatpulse_agent --check-image <file> [--config <filters.json>]\n"
                << L"  --out              output file (default " << kDefaultOut << L")\n"
                << L"  --config           filter file (default: filters.json next to the program)\n"
                << L"  --no-close-events  fallback if Close events cause ETW losses\n"
                << L"  --rundown          experiment: ask ETW to report what is already open\n"
                << L"  --no-sysmon        run without Sysmon: no LSASS or full-key zone signals\n"
+               << L"  --check-image      print what the process filter decides for one file, then exit\n"
                << L"Stop with Ctrl+C.\n";
+}
+
+const wchar_t* yes_no(bool value) {
+    return value ? L"yes" : L"no";
+}
+
+// Shows the process filter's three conditions for one file (agent/README.md, "Noise
+// filters"). The log can't prove a filter worked, because a process that wrote nothing
+// looks the same as one that was dropped.
+int check_image(const std::wstring& image, const std::filesystem::path& config_path) {
+    try {
+        const tp::Filters filters = tp::Filters::load(config_path);
+        tp::Enricher enricher;
+        const tp::ImageInfo& info = enricher.get(image, false);
+        const bool listed = filters.ignores_process(image);
+
+        std::wcout << L"Image:                   " << image
+                   << L"\nSHA-256:                 " << info.sha256.value_or(L"could not be read")
+                   << L"\nVerified signature:      " << yes_no(info.is_signed)
+                   << L"\nSigner:                  " << info.signer.value_or(L"none")
+                   << L"\nMicrosoft root:          " << yes_no(info.microsoft_root)
+                   << L"\nPath is on the list:     " << yes_no(listed)
+                   << L"\nProcess filter drops it: "
+                   << yes_no(listed && info.is_signed && info.microsoft_root) << std::endl;
+        return kExitOk;
+    } catch (const std::exception& error) {
+        std::cerr << "Image check failed: " << error.what() << "\n";
+        return kExitStartupFailed;
+    }
 }
 
 void print_coverage(const wchar_t* label, uint64_t covered, uint64_t total) {
@@ -168,6 +200,7 @@ int wmain(int argc, wchar_t** argv) {
     std::filesystem::path config_path = default_config_path();
     tp::SessionOptions session_options;
     bool use_sysmon = true;
+    std::optional<std::wstring> image_to_check;
 
     for (int i = 1; i < argc; ++i) {
         const std::wstring argument = argv[i];
@@ -191,6 +224,10 @@ int wmain(int argc, wchar_t** argv) {
             (argument == L"--out" ? out_path : config_path) = argv[++i];
             continue;
         }
+        if (argument == L"--check-image" && i + 1 < argc) {
+            image_to_check = argv[++i];
+            continue;
+        }
         std::wcerr << L"Unknown or incomplete argument: " << argument << L"\n";
         print_usage();
         return kExitBadArguments;
@@ -206,6 +243,7 @@ int wmain(int argc, wchar_t** argv) {
                    << L"Open PowerShell with \"Run as administrator\" and try again.\n";
         return kExitNotAdmin;
     }
+    if (image_to_check) return check_image(*image_to_check, config_path);
 
     g_stop_requested = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_shutdown_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);

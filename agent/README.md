@@ -42,6 +42,7 @@ cd C:\ThreatPulseLab\threatpulse
 | `--no-close-events` | Off. Fallback: use it if Close events cause ETW losses. See "How file paths are resolved" |
 | `--rundown` | Off. Untested experiment: asks ETW to report files and keys that are already open. If Windows refuses, the agent stops with an error |
 | `--no-sysmon` | Off. Runs without Sysmon, so there are no LSASS signals and no Sysmon registry events. Without this option, a missing Sysmon stops the agent, so a recording can't silently lack zone signals |
+| `--check-image <file>` | Off. Prints the signature, Microsoft root and process filter result for one file, then exits without starting ETW |
 
 **To stop it, press Ctrl+C.** The agent stops the session, writes out everything queued and prints a summary. If `--out` already exists, the old file is renamed with a timestamp, so runs never overwrite each other.
 
@@ -395,7 +396,7 @@ Settled in the VM:
 | Does LSASS access appear with `vm_read`? | Atomic T1003.001 in step 2.3 gives a `process_access` event | Use the project-specific Sysmon config from PLANNING.md Section 9 |
 | Do event 12, the Close filter and the network filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
 | Does QueryKey give complete names? | Compare runs of the same activity with and without keyword `0x8000`. Total registry coverage rose from 25% (49 of 196) to 59% (962 of 1625), but the workload and other fixes changed too, so this doesn't prove it | Remove keyword `0x8000` |
-| Does the Microsoft root check recognise Defender and Sysmon? | No `file_write` events from `MsMpEng.exe` or `Sysmon64.exe` in the log | Safe but noisy: those events stay in the log. Check `chains_to_microsoft_root` in `enrich.cpp` |
+| Does the Microsoft root check recognise Defender and Sysmon? | `--check-image` prints `Process filter drops it: yes` for both, and `tools/check_readme_items.py` finds no file or registry events from them | Safe but noisy: those events stay in the log. Check `chains_to_microsoft_root` in `enrich.cpp` |
 
 **Rundown was not tested.** `--rundown` stays off, so ETW can't name a handle opened before the agent started, and `Started before agent` is not expected to reach 100%. For Run keys, FIM (step 2.2) and Sysmon Event ID 13 cover that gap.
 
