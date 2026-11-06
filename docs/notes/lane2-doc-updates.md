@@ -169,3 +169,9 @@ From `track-b/rules`, after replaying batch 1 through the rules and features. Sa
 4. **The cleanup process deletes the test folder with the same behaviour as the attack.** It fires the ransomware rule too. It should be labelled `harness`.
 5. **Edge's autolaunch value** (`MicrosoftEdgeAutoLaunch_*`) is removed and re-added by Edge itself. FIM sees both. The approved-change list will need an entry for it, or the policy will restore it.
 6. **An open question for the labels:** v2 labels didn't exist yet when this was written, so `part` values other than `test`, `harness`, `background` and empty will stop `triage/features.py` with an error. Tell me if there are more.
+
+## Added after the v2 labels (batch 1)
+
+1. **For Track A, labels:** in the T1486 session, the cleanup PowerShell that deletes the test folder afterwards (same 25 documents) is labelled `part=background`, `label=benign`. It behaves exactly like the attack, so it would teach the model that ransomware behaviour is benign. It should be `harness`, as in the other sessions. This replaces item 4 of the previous section.
+2. **PHASES.md step 2.5 or 3.4:** batch 1 gives 7 malicious process trees and 393 benign ones. State the class balance in the evaluation report, and that most benign trees are single processes with no start event.
+3. **PLANNING.md Section 8.3 (ML quality):** report results per process tree, and say that the T1003.001 attack tree has 2 events because LSA protection blocked the dump, so it is expected to be hard to tell apart.

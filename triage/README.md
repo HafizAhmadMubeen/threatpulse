@@ -49,6 +49,17 @@ A **root** is a process whose parent has no `process_start` in the session. A tr
   - **Why the half second:** FIM and Sysmon use different clocks. In the first real recordings, FIM's "removed" came 45 ms before the Sysmon delete that caused it.
   - **Checked on real keys:** ETW writes `HKCU\SOFTWARE\...` where FIM and Sysmon write `HKCU\Software\...`. Comparing ignoring case handles that, and changes were linked in the recordings that had them.
 
+## First real recordings (batch 1, v2 labels)
+
+9 sessions gave 400 trees: 7 malicious (5 training, 2 held-out) and 393 benign. Every attack session has exactly one malicious tree, rooted at the test's own process. The harness was left out of 6 sessions (116 to 125 events each). FIM changes were linked in the sessions that had them.
+
+**Problems for step 3.4, not solved here**
+- **The T1486 cleanup looks like the attack but is labelled benign.** After the script, a second PowerShell deletes the same 25 documents. In the v2 labels it is `background`, not `harness`, so the model would see two trees with identical document-folder behaviour, one labelled malicious and one benign. Labelling it `harness` would fix it.
+- **7 malicious trees against 393 benign is far too few to train on.** Batch 1 is only a first look. The recording plan has 30 training and 9 held-out runs.
+- **Some attack trees carry almost no signal.** The T1003.001 test part is 1 process and 2 events, because LSA protection stopped the dump. T1053.005 and T1547.001 have 12 to 14 events.
+- **Most benign trees are single processes with no start event** (`observed_start` 0), such as System and long-running services. Step 3.4 should filter them, so "no start event" isn't learned as benign.
+- **Many file events have no path,** so they can't be placed in a zone. 22,663 and 7,089 in the two benign sessions.
+
 ## Known limits
 
 - **LSASS features may be all 0 in the real data.** With LSA protection on, Windows denies the read and the sensor sees no access event (PLANNING.md 4.3).
