@@ -52,7 +52,7 @@ def score_process(events: list[Event]) -> float: ...    # XGBoost risk score, 0.
 
 # Track A: policy/
 def decide(alert: Alert, context: dict) -> Decision: ...   # ABAC, deterministic
-def execute(decision: Decision) -> Decision: ...           # runs the action, updates status
+def execute(decision: Decision, alert: Alert) -> Decision: ...   # runs the actions in the lab VM, updates status
 
 # Track C: backend/
 def write_report(alert: Alert, events: list[Event]) -> Report: ...  # LLM, text only, no tools
@@ -66,6 +66,7 @@ Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 - **`risk_score` is nullable.** Null means not scored, and `decide` treats null as not matching `risk_score_gte`.
 - **`rule_id`** is `ML-TRIAGE` for `ml` alerts and `SIG-<name>` for `signature` alerts.
 - **Decisions** have a decision-level `ts`, and each action has `executed_at`. `request_kill` and `request_delete` have `reviewed_by` and `reviewed_at`, set on approve or reject. Automatic actions use only `executed`, `failed` and `skipped`. `reason` is required on `skipped` and `failed`, and `policy_rules` may be empty.
+- **`execute` takes the Alert too.** A `restore` or `request_delete` action names no item, so the registry value or file comes from `alert.object`; process actions use the `target` in the Decision. It acts only in the lab VM, and a request action only once it is `approved`. Details: `policy/README.md`.
 - **`/fim/changes/{id}/approve`** takes the `event_id` of the `fim_change` event as `{id}`.
 
 ## 3. Phase-by-phase tasks
