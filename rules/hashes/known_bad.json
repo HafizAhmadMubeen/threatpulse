@@ -1,0 +1,15 @@
+{
+  "description": "Known-bad SHA-256 hashes (1st generation signatures). A name becomes rule_id SIG-<name>.",
+  "entries": [
+    {
+      "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+      "name": "EICAR",
+      "description": "EICAR antivirus test file. Only this public hash is stored, never the file."
+    },
+    {
+      "sha256": "4ab327426d6fac1d871f0fa147ea6e270bb319e2b047f150b557ec8e342017ae",
+      "name": "TEST-MARKER",
+      "description": "Harmless test file: exactly the 23 ASCII characters THREATPULSE-TEST-MARKER, with no newline."
+    }
+  ]
+}
