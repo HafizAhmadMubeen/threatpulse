@@ -6,7 +6,7 @@
 # "suspend" needs the process to still exist. This script differs in three ways:
 #   - a short pause between files, so the burst lasts seconds and containment can hit it
 #   - the process stays alive for -HoldSeconds after the last file
-#   - the files stay in place (nothing is cleaned up until you ask)
+#   - the files stay in place for the whole hold, and for good with -NoCleanup
 #
 # It only touches dummy files that it creates itself, in its own folder,
 # Documents\ThreatPulseDemo. "Encrypting" overwrites a copy of a dummy file with random
