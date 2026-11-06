@@ -125,11 +125,12 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 **Which Sysmon config:**
 - We use **`sysmon-modular`** (Olaf Hartong), which includes ProcessAccess rules for LSASS.
 - The popular SwiftOnSecurity config leaves ProcessAccess logging essentially disabled by default, which would make the LSASS zone blind.
-- Whatever config is used, **Gate 2 checks that Event ID 10 events targeting `lsass.exe` actually appear** (with Atomic T1003.001).
+- Whatever config is used, **Gate 2 records what Atomic T1003.001 produces.** With LSA protection on, no Event ID 10 targeting `lsass.exe` appeared (Section 4.3).
 
 ### 4.3 Limits we accept and will state openly
 
 - User-mode detection is **detect-then-contain**, not prevention. For example, Sysmon reports LSASS access *after* the handle is opened, so suspending the process may come after part of the memory is read.
+- **With LSA protection on, the sensor recorded no LSASS access (accepted limitation).** Microsoft's LSA protection stops non-protected processes from reading LSASS memory, and the VM has it on (`RunAsPPL` is `0x2`). In step 2.3, Atomic T1003.001 test #2 failed with `Access is denied`. The agent recorded 5998 events, 0 invalid, with no `process_access` event targeting `lsass.exe`, while `process_access` decoding worked on other targets, including `vm_read`. So Windows blocked the dump, and our sensor did not see the attempt. LSA protection and Defender are never disabled to change this result.
 - Persistence protection is **detect-and-revert**, not block. The process that wrote the key has often already exited, so there may be nothing left to suspend.
 - Our own ransomware detector suspends after a burst of encryptions, so a few files may be lost first. We measure this ("files lost before containment") as a metric, as ShieldFS-style evaluations do.
 
@@ -401,7 +402,7 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
 **Gate 2**
 - [ ] The agreed number of benign sessions and every non-held-out technique recorded and exported to the host
 - [ ] Modifying the hosts file in the VM triggers a FIM alert
-- [ ] Running Atomic T1003.001 in the VM produces a `process_access` event on LSASS with `vm_read`
+- [x] **Accepted limitation (Section 4.3):** with LSA protection on, Atomic T1003.001 is denied by Windows and produces no `process_access` event on LSASS. `process_access` decoding, including `vm_read`, is proven on other targets
 - [ ] Each behaviour rule fires on its Atomic test and **not** on the benign sessions (or the false positives are documented)
 - [ ] A retrieval query like "process reads LSASS memory" returns T1003.001 in the top results
 
@@ -508,7 +509,10 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | VM evaluation licence expires (90 days) | Rebuild from the ISO. Keep setup steps scripted in `docs/lab-setup.md` |
 | A member falls behind | See "Rebalancing" in ROADMAP.md. Simplify a layer, never remove it |
 | The backend API has no authentication, so any process in the VM could approve its own change | Must be solved before step 4.6 |
-| `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Verify with Atomic T1003.001 in step 2.3 | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM |
+| `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Step 2.3 couldn't settle this, because LSA protection denied the access | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM. Untested |
+| With LSA protection on, rule P1 has no `process_access` event on LSASS to match, so it can't fire | Open. Decide before step 3.1. Until then, P1 is unproven in the VM |
+| The LSASS demo in Section 8.2 ("Accessing process suspended") and step 4.5 can't run as written, and success criterion 2 in Section 1 expects all four zones in a live demo | Open. Decide the LSASS demo before step 4.5 |
+| T1003.001 is a training technique, but its LSASS-access feature will be empty, and the step 3.3 allowlist may have little to learn from | Open. Track B shouldn't rely on that feature for T1003.001 until this is settled. Whether `process_start` gives Track B a usable behaviour signal is unchecked |
 
 ## 10. Decisions
 

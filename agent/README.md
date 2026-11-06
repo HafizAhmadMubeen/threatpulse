@@ -144,7 +144,7 @@ agent\.venv\Scripts\python agent\tools\check_test_run.py C:\ThreatPulseLab\logs\
 | No event loss | `Lost by ETW`, `Lost, queue full` and `Sysmon read errors` stay at 0 |
 | Sysmon reports the Run and RunOnce writes, and the Run value's removal as `registry_delete` | `check_test_run.py` |
 | ETW and Sysmon both report the web request, with the same destination IP | `check_test_run.py`. A byte-order mistake in the ETW fields would fail this or the port 443 check |
-| The dummy process access is decoded with `vm_read` | `check_test_run.py`. The LSASS check itself stays open until step 2.3 |
+| The dummy process access is decoded with `vm_read` | `check_test_run.py`. LSASS itself is an accepted limitation, in PLANNING.md 4.3 |
 
 To see which programs caused any gaps, run `agent\.venv\Scripts\python agent\tools\coverage_report.py <events.jsonl>`.
 
@@ -272,7 +272,7 @@ A child process writing through a handle its parent opened gets a null path. A s
 | Run, RunOnce, RunOnceEx, under HKCU and HKLM, including WOW6432Node | Logged, through `TargetObject contains \CurrentVersion\Run` |
 | Run key writes by `System`, `backgroundTaskHost.exe` or anything under `C:\$WINDOWS.~BT\` | Not logged, because exclusions win. The config also excludes vendor tools by path. FIM still catches the change |
 | Network | Only selected programs and ports. `powershell.exe`, `cmd.exe`, `rundll32.exe` and anything under `C:\Users` are logged. `curl.exe` and programs in `Program Files` on port 443 are not, which is one reason ETW's Kernel-Network is added |
-| LSASS access | `0x1010`, `0x1F1FFF`, `0x1FFFFF` and `0x143A` are logged. `0x1000` and `0x1400` are excluded. `0x1410` is logged only with an `UNKNOWN` call trace. See the risk in PLANNING.md Section 9 |
+| LSASS access | `0x1010`, `0x1F1FFF`, `0x1FFFFF` and `0x143A` are logged. `0x1000` and `0x1400` are excluded. `0x1410` is logged only with an `UNKNOWN` call trace. See the risk in PLANNING.md Section 9. These rules gave no LSASS event in the VM, where LSA protection is on: see "What the VM has shown" |
 
 ## Event field notes
 
@@ -365,7 +365,7 @@ Results of the fourth VM run, with the reader fixed:
 | File writes with a path, `Started after agent` | 96.6% (308 of 319), above the 95% target |
 | Registry writes with a full key, `Started after agent` | 92.6% (113 of 122). There is no target for this |
 
-**Step 2.1 is verified, except for LSASS.** The `process_access` path works on a dummy process, but LSASS access itself stays open until Atomic T1003.001 in step 2.3. For the HKLM Run and RunOnce keys, only FIM's handling has been tested in the VM: nothing has checked Sysmon's events for them.
+**Step 2.1 is verified, except for LSASS.** The `process_access` path works on a dummy process. LSASS itself is an accepted limitation: see below. For the HKLM Run and RunOnce keys, only FIM's handling has been tested in the VM: nothing has checked Sysmon's events for them.
 
 File coverage depends on what Windows is doing during a run. The third run's gaps came from Windows Update (`MpSigStub`, `wuaucltcore`), svchost services and OneDrive, not from the test, so no resolver change is needed. In the fourth run the gaps were svchost (8) and OneDrive (3). Its registry gaps were PowerShell (5), conhost (2) and ping (1).
 
@@ -392,12 +392,23 @@ Settled in the VM:
 | Does the agent recover from a crash? | Yes. After `Stop-Process -Force` the session was still `Running`, the next start printed `Stopped a leftover ThreatPulse-Agent session.`, and after Ctrl+C `logman` gave `Data Collector Set was not found.` | Fifth |
 | Does the Microsoft root check recognise Defender and Sysmon? | Yes. `--check-image` gave `Verified signature: yes`, `Microsoft root: yes` and `Process filter drops it: yes` for `MsMpEng.exe` (Platform 4.18.26100.4-0) and `Sysmon64.exe`. No file or registry event from them got through, and 8 other events showed they were active | Fifth |
 
+**LSASS result, from Atomic T1003.001 test #2 in step 2.3.** This is an accepted limitation (PLANNING.md 4.3):
+
+| Check | Result |
+|---|---|
+| LSA protection | On: `RunAsPPL` is `0x2` |
+| The dump | Failed with `Access is denied` |
+| `validate_events.py` | 5998 events, 0 invalid |
+| `process_access` events targeting `lsass.exe` | None. The only `lsass` matches are `file_write` events with LSASS as the writer |
+| `process_access` decoding | Works: other events show `vm_read`, for example with target `StoreDesktopExtension.exe` |
+
+Windows blocked the dump, but the agent recorded no sign of the attempt in `process_access`. A single test can't show why, and the project Sysmon config in PLANNING.md Section 9 is untested. Nothing was disabled to get this result.
+
 ## Questions to settle in the VM
 
 | Question | How to tell | If the answer is bad |
 |---|---|---|
 | Do Kernel-Network's connect events include failed connections? | Compare with a connection to a closed port | Document it, because `network_connect` would then mean "attempted" |
-| Does LSASS access appear with `vm_read`? | Atomic T1003.001 in step 2.3 gives a `process_access` event | Use the project-specific Sysmon config from PLANNING.md Section 9 |
 | Do event 12, the Close filter and the network filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
 | Does QueryKey give complete names? | Compare runs of the same activity with and without keyword `0x8000`. Total registry coverage rose from 25% (49 of 196) to 59% (962 of 1625), but the workload and other fixes changed too, so this doesn't prove it | Remove keyword `0x8000` |
 
