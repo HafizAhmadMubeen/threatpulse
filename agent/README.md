@@ -387,6 +387,10 @@ Settled in the VM:
 | Does the agent decode the access mask, and see Sysmon deletions? | Yes. `0x21410` gave `vm_read`, and removing the Run value gave `registry_delete` | Third |
 | Does the Sysmon reader see everything? | Yes. 0 errors, and it read the 35 events Sysmon logged in the same period | Fourth |
 | Which programs keep file coverage down? | Background Windows activity, not the test. See the fourth run above | Fourth |
+| Is `cmd.exe` signed, with a hash? | Yes. Signed by `Microsoft Windows`, with a SHA-256 | Fifth |
+| Are the agent's own events dropped? | Yes. No event had the agent as its process | Fifth |
+| Does the agent recover from a crash? | Yes. After `Stop-Process -Force` the session was still `Running`, the next start printed `Stopped a leftover ThreatPulse-Agent session.`, and after Ctrl+C `logman` gave `Data Collector Set was not found.` | Fifth |
+| Does the Microsoft root check recognise Defender and Sysmon? | Yes. `--check-image` gave `Verified signature: yes`, `Microsoft root: yes` and `Process filter drops it: yes` for `MsMpEng.exe` (Platform 4.18.26100.4-0) and `Sysmon64.exe`. No file or registry event from them got through, and 8 other events showed they were active | Fifth |
 
 ## Questions to settle in the VM
 
@@ -396,7 +400,6 @@ Settled in the VM:
 | Does LSASS access appear with `vm_read`? | Atomic T1003.001 in step 2.3 gives a `process_access` event | Use the project-specific Sysmon config from PLANNING.md Section 9 |
 | Do event 12, the Close filter and the network filter hold up under heavy load? | `Lost by ETW` stays at 0 while recording the dataset. The second run was small | Increase the buffers in `etw_session.cpp`, then try `--no-close-events` |
 | Does QueryKey give complete names? | Compare runs of the same activity with and without keyword `0x8000`. Total registry coverage rose from 25% (49 of 196) to 59% (962 of 1625), but the workload and other fixes changed too, so this doesn't prove it | Remove keyword `0x8000` |
-| Does the Microsoft root check recognise Defender and Sysmon? | `--check-image` prints `Process filter drops it: yes` for both, and `tools/check_readme_items.py` finds no file or registry events from them | Safe but noisy: those events stay in the log. Check `chains_to_microsoft_root` in `enrich.cpp` |
 
 **Rundown was not tested.** `--rundown` stays off, so ETW can't name a handle opened before the agent started, and `Started before agent` is not expected to reach 100%. For Run keys, FIM (step 2.2) and Sysmon Event ID 13 cover that gap.
 
