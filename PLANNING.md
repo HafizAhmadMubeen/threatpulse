@@ -397,6 +397,7 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
   - **Benign:** normal use plus "noisy" normal activity (installing/uninstalling software, Windows Update, admin PowerShell, zipping files)
   - **Malicious:** Atomic Red Team tests from the agreed list, plus our own T1486 script
 - Labelling: the recording script launches each test and records its start/end time and PID. Events from that process tree are labelled malicious. Our T1486 script is launched the same way, so the same labelling works.
+- Limit of tree labelling: T1053.005's task runs under the Task Scheduler service, outside the launcher's tree, so only the part that creates the task is labelled. This affects evaluation of that held-out technique and is stated in the results.
 - Logs leave the VM through the export procedure (Section 3.2) **before** each rollback
 
 **Gate 2**
@@ -525,6 +526,10 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
 | FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
+| Recording plan | 5 runs per training test: T1547.001 #1 and #2, T1003.001 #2, T1059.001 #17, T1105 #29 and the T1486 dummy-file script, 30 in total. 3 runs per held-out test: T1053.005 #2, T1685 #51 and T1218.011 #9, 9 in total. 15 benign sessions of about 10 minutes, mixing normal use, install/uninstall, Windows Update, admin PowerShell and zipping files |
+| Network mode in the dataset | About 5 of the 15 benign sessions are recorded with NAT on, so network mode doesn't correlate with the label (spurious correlation, Arp et al. 2022). Each session records its network mode in `session.json` |
+| Labels | A separate `labels.csv` keyed by `event_id`, because the Event schema allows no extra fields |
+| Sensor stop | `start_lab_sensors.ps1` stops the agent and FIM through named Windows events, the same clean stop as Ctrl+C. It never kills them |
 | FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. The restore action first saves what it is about to undo in `C:\ThreatPulseLab\fim\quarantine\`, and approval puts that back. Registry: the full value and its type (`reg_type`). Files: a copy of the changed file. `target.change.new_value` is for display only, because it is cut to 1024 characters and has no type. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
 | API | Approve and reject take the body `{"reviewed_by", "action"}`, per action. New `GET /fim/changes`. API response schemas live in `contracts/schemas/api/` |
 | FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
@@ -548,7 +553,6 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | Free-tier provider | Groq / Google Gemini / other | Test both with a sample report, pick on quality and rate limits |
 | Vector DB | ChromaDB / FAISS | ChromaDB (simpler, stores documents with metadata) |
 | Track B and C owners | Haider Shahid / Ahmed Muaz | Assigned within the team |
-| Number of benign sessions | — | Agree in Phase 0 |
 
 ## 11. References
 

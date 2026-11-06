@@ -175,6 +175,22 @@ agent\.venv\Scripts\python agent\tools\validate_events.py C:\ThreatPulseLab\logs
 
 In WSL, use `cd agent && uv sync`, then `uv run python tools/validate_events.py <file>`.
 
+## Record a session
+
+These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A person starts every recording.
+
+| Script | Job |
+|---|---|
+| `tools/start_lab_sensors.ps1` | Starts the agent and FIM together, and stops both cleanly. Used for every recording and demo |
+| `tools/record_session.ps1` | Records one session, and writes `session.json` |
+| `tools/vm_t1486_script.ps1` | Our harmless T1486 test, on dummy files only |
+| `tools/label_session.py` | Writes `labels.csv` for one session |
+| `config/recording_tests.json` | The only tests that may be recorded, with their runs and network mode |
+
+Each session gets its own folder under `C:\ThreatPulseLab\logs\sessions\`, holding `events.jsonl`, `fim.jsonl`, `session.json` and both sensors' summaries.
+
+`record_session.ps1` refuses a test that isn't on the list, an Atomic install that isn't the pinned commit, and a `-Network` value that doesn't match what the VM can reach. Cleanup runs as a separate process after the end time, so it's never labelled as the attack.
+
 ## How it works
 
 ```

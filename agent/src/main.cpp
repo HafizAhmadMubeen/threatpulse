@@ -34,6 +34,10 @@ namespace {
 constexpr wchar_t kLabMarker[] = L"C:\\ThreatPulseLab\\LAB_VM";
 constexpr wchar_t kDefaultOut[] = L"C:\\ThreatPulseLab\\logs\\events.jsonl";
 
+// Named so that start_lab_sensors.ps1 can stop the agent cleanly from another console.
+// Being named also shows when another agent is already running.
+constexpr wchar_t kStopEventName[] = L"Global\\ThreatPulse-Agent-Stop";
+
 // Exit codes
 constexpr int kExitOk = 0;
 constexpr int kExitBadArguments = 1;
@@ -245,10 +249,16 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (image_to_check) return check_image(*image_to_check, config_path);
 
-    g_stop_requested = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_stop_requested = CreateEventW(nullptr, TRUE, FALSE, kStopEventName);
+    const bool already_running = GetLastError() == ERROR_ALREADY_EXISTS;
     g_shutdown_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!g_stop_requested || !g_shutdown_done) {
         std::wcerr << L"Could not create the stop events.\n";
+        return kExitStartupFailed;
+    }
+    // A second agent would stop the first one's ETW session as a "leftover".
+    if (already_running) {
+        std::wcerr << L"Refusing to start: another agent is already running.\n";
         return kExitStartupFailed;
     }
 

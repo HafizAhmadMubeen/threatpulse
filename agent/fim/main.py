@@ -16,6 +16,7 @@ from pathlib import Path
 LAB_MARKER = Path(r"C:\ThreatPulseLab\LAB_VM")
 DEFAULT_FOLDER = Path(r"C:\ThreatPulseLab\fim")
 DEFAULT_OUT = Path(r"C:\ThreatPulseLab\logs\fim.jsonl")
+STOP_EVENT_NAME = r"Global\ThreatPulse-Fim-Stop"
 
 
 def check_environment() -> str | None:
@@ -54,7 +55,7 @@ def watch(folder: Path, out: Path, poll_only: bool) -> int:
     from events import EventWriter
     from monitor import FULL_COMPARE_SECONDS, Monitor, run
     from targets import REGISTRY_TARGETS, folder_targets
-    from windows_watch import WAIT_OBJECT_0, WindowsSource
+    from windows_watch import ERROR_ALREADY_EXISTS, WAIT_OBJECT_0, WindowsSource
 
     try:
         baseline = load_baseline(folder)
@@ -62,7 +63,11 @@ def watch(folder: Path, out: Path, poll_only: bool) -> int:
         print(f"No baseline in {folder}. Run: main.py baseline", file=sys.stderr)
         return 1
 
-    stop_event = win32event.CreateEvent(None, True, False, None)
+    # Named so that start_lab_sensors.ps1 can stop FIM cleanly from another console.
+    stop_event = win32event.CreateEvent(None, True, False, STOP_EVENT_NAME)
+    if win32api.GetLastError() == ERROR_ALREADY_EXISTS:
+        print("Refusing to start: FIM is already running.", file=sys.stderr)
+        return 1
 
     def on_console_event(_kind: int) -> bool:
         win32event.SetEvent(stop_event)
