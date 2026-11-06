@@ -62,6 +62,8 @@ export interface Alert {
   technique_ids: string[]
   risk_score: number | null
   event_type: string
+  /** For analysts only. The policy engine ignores it. Reasons can quote file content. */
+  static_analysis?: { score: number | null; reasons: string[] }
   subject: {
     pid: number
     image: string

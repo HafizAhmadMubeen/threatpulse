@@ -36,7 +36,7 @@ function fixtures(): Fixtures {
         path: fim.target.path,
         registry_key: fim.target.registry_key,
         change: fim.target.change!,
-        alert_id: 'a-0004',
+        alert_id: 'a-20261105T093000-000004',
         status: 'pending',
       },
     ],
@@ -110,9 +110,9 @@ afterEach(() => {
 describe('alert list', () => {
   it('shows zone, layer and risk score for every alert', async () => {
     open('/')
-    await screen.findByRole('link', { name: 'a-0001' })
+    await screen.findByRole('link', { name: 'a-20261105T093000-000001' })
     expect(screen.getAllByRole('row')).toHaveLength(data.alerts.length + 1)
-    const row = screen.getByRole('link', { name: 'a-0003' }).closest('tr')!
+    const row = screen.getByRole('link', { name: 'a-20261105T093000-000003' }).closest('tr')!
     expect(within(row).getByText('lsass')).toBeTruthy()
     expect(within(row).getByText('rule')).toBeTruthy()
     expect(within(row).getByText('0.88')).toBeTruthy()
@@ -121,8 +121,8 @@ describe('alert list', () => {
   it('shows "not scored" for null, and a real score of 0 as a number', async () => {
     data.alerts[0].risk_score = 0
     open('/')
-    const scored = (await screen.findByRole('link', { name: 'a-0001' })).closest('tr')!
-    const unscored = screen.getByRole('link', { name: 'a-0005' }).closest('tr')!
+    const scored = (await screen.findByRole('link', { name: 'a-20261105T093000-000001' })).closest('tr')!
+    const unscored = screen.getByRole('link', { name: 'a-20261105T093000-000005' }).closest('tr')!
     expect(within(scored).getByText('0.00')).toBeTruthy()
     expect(within(scored).queryByText('not scored')).toBeNull()
     expect(within(unscored).getByText('not scored')).toBeTruthy()
@@ -163,7 +163,7 @@ describe('severity', () => {
 
   it('shows a low-scoring signature alert as Confirmed, not as safe', async () => {
     open('/')
-    const signature = await row('a-0001')
+    const signature = await row('a-20261105T093000-000001')
     expect(within(signature).getByText('0.12')).toBeTruthy()
     expect(within(signature).getByText('Confirmed').className).toContain('severity-confirmed')
     expect(within(signature).queryByText('Low')).toBeNull()
@@ -172,9 +172,9 @@ describe('severity', () => {
   it('colours by severity, never by the raw score', async () => {
     open('/')
     for (const [alertId, score, severity, colour] of [
-      ['a-0001', '0.12', 'Confirmed', 'severity-confirmed'],
-      ['a-0002', '0.22', 'Low', 'severity-low'],
-      ['a-0003', '0.88', 'High', 'severity-high'],
+      ['a-20261105T093000-000001', '0.12', 'Confirmed', 'severity-confirmed'],
+      ['a-20261105T093000-000002', '0.22', 'Low', 'severity-low'],
+      ['a-20261105T093000-000003', '0.88', 'High', 'severity-high'],
     ]) {
       const cells = within(await row(alertId))
       expect(cells.getByText(severity).className).toContain(colour)
@@ -184,7 +184,7 @@ describe('severity', () => {
 
   it('keeps "not scored" beside the badge on a confirmed FIM change', async () => {
     open('/')
-    const fim = within(await row('a-0005'))
+    const fim = within(await row('a-20261105T093000-000005'))
     expect(fim.getByText('not scored')).toBeTruthy()
     expect(fim.getByText('Confirmed')).toBeTruthy()
   })
@@ -192,23 +192,64 @@ describe('severity', () => {
   it('says "Not scored" once when nothing else is known', async () => {
     data.alerts[2].risk_score = null
     open('/')
-    const unscored = within(await row('a-0003'))
+    const unscored = within(await row('a-20261105T093000-000003'))
     expect(unscored.getByText('Not scored').className).toContain('severity-none')
     expect(unscored.queryByText('not scored')).toBeNull()
   })
 
   it('shows the same badge on the detail page', async () => {
-    open('/alerts/a-0001')
+    open('/alerts/a-20261105T093000-000001')
     await screen.findByText('Evidence events')
     expect(screen.getByText('Confirmed')).toBeTruthy()
   })
 })
 
+describe('static analysis', () => {
+  const heuristic = 'a-20261105T093000-000010'
+  const upx = 'a-20261105T093000-000002'
+
+  it('shows the static score next to the severity badge on the list', async () => {
+    open('/')
+    const cells = within((await screen.findByRole('link', { name: heuristic })).closest('tr')!)
+    expect(cells.getByText('Static 0.60')).toBeTruthy()
+    expect(cells.getByText('Not scored')).toBeTruthy()
+  })
+
+  it('keeps the static score out of the severity', async () => {
+    open('/')
+    const cells = within((await screen.findByRole('link', { name: upx })).closest('tr')!)
+    expect(cells.getByText('Static 0.95')).toBeTruthy()
+    expect(cells.getByText('0.22')).toBeTruthy()
+    expect(cells.getByText('Low')).toBeTruthy()
+  })
+
+  it('shows no static score for a signature match, but lists how it matched', async () => {
+    const { container } = open('/alerts/a-20261105T093000-000001')
+    await screen.findByText('Evidence events')
+    expect(container.textContent).toContain('SHA-256 match')
+    expect(container.textContent).toContain('YARA rule EICAR_Test_File')
+    expect(screen.queryByText(/^Score /)).toBeNull()
+  })
+
+  it('shows the score and reasons on the detail page', async () => {
+    const { container } = open(`/alerts/${upx}`)
+    await screen.findByText('Evidence events')
+    expect(screen.getByText('Score 0.95')).toBeTruthy()
+    expect(container.textContent).toContain('Packer section name: UPX0')
+  })
+
+  it('shows nothing extra for an alert without it', async () => {
+    open('/alerts/a-20261105T093000-000003')
+    await screen.findByText('Evidence events')
+    expect(screen.queryByText('Static analysis')).toBeNull()
+  })
+})
+
 describe('alert IDs never wrap', () => {
   it.each([
-    ['the alert list', '/', 'a-0009'],
-    ['approvals', '/approvals', 'a-0007'],
-    ['FIM changes', '/fim', 'a-0004'],
+    ['the alert list', '/', 'a-20261105T093000-000009'],
+    ['approvals', '/approvals', 'a-20261105T093000-000007'],
+    ['FIM changes', '/fim', 'a-20261105T093000-000004'],
   ])('on %s', async (_page, path, alertId) => {
     open(path)
     const link = await screen.findByRole('link', { name: alertId })
@@ -219,12 +260,12 @@ describe('alert IDs never wrap', () => {
 describe('telemetry is plain text', () => {
   it('shows the prompt-injection name as text on the list', async () => {
     const { container } = open('/')
-    await screen.findByRole('link', { name: 'a-0009' })
+    await screen.findByRole('link', { name: 'a-20261105T093000-000009' })
     expect(container.textContent).toContain(INJECTION_NAME)
   })
 
   it('shows the prompt-injection name as text on the detail page, with the same decision', async () => {
-    const { container } = open('/alerts/a-0009')
+    const { container } = open('/alerts/a-20261105T093000-000009')
     await screen.findByText('Evidence events')
     expect(container.textContent).toContain(INJECTION_NAME)
     expect(screen.getByText('block_network')).toBeTruthy()
@@ -239,6 +280,7 @@ describe('telemetry is plain text', () => {
     alert.object.registry_key = MARKUP
     alert.object.access = [MARKUP]
     alert.rule_id = MARKUP
+    alert.static_analysis = { score: 0.7, reasons: [MARKUP] }
     for (const event of data.events) {
       if (!alert.evidence_event_ids.includes(event.event_id)) continue
       event.process.image = MARKUP
@@ -252,7 +294,7 @@ describe('telemetry is plain text', () => {
     const decision = data.decisions.find((item) => item.alert_id === alert.alert_id)!
     decision.attributes.injected = MARKUP
 
-    const { container } = open('/alerts/a-0009')
+    const { container } = open('/alerts/a-20261105T093000-000009')
     await screen.findByText('Evidence events')
     expect(container.querySelector('[data-testid="injected"]')).toBeNull()
     expect(container.querySelector('b')).toBeNull()
@@ -260,7 +302,7 @@ describe('telemetry is plain text', () => {
   })
 
   it('never turns a telemetry URL into a link', async () => {
-    const { container } = open('/alerts/a-0009')
+    const { container } = open('/alerts/a-20261105T093000-000009')
     await screen.findByText('Evidence events')
     expect(container.textContent).toContain('192.0.2.10')
     const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'))
@@ -285,7 +327,7 @@ describe('telemetry is plain text', () => {
 
 describe('alert detail', () => {
   it('shows the evidence, the decision with statuses, and the report', async () => {
-    const { container } = open('/alerts/a-0004')
+    const { container } = open('/alerts/a-20261105T093000-000004')
     await screen.findByText('Evidence events')
     expect(screen.getAllByText('registry_set')).toHaveLength(2)
     expect(screen.getByText('fim_change')).toBeTruthy()
@@ -297,19 +339,19 @@ describe('alert detail', () => {
   })
 
   it('explains a missing report', async () => {
-    open('/alerts/a-0002')
+    open('/alerts/a-20261105T093000-000002')
     expect(await screen.findByText(/No report/)).toBeTruthy()
   })
 
   it('shows an unknown process and a missing score', async () => {
-    const { container } = open('/alerts/a-0005')
+    const { container } = open('/alerts/a-20261105T093000-000005')
     await screen.findByText('Evidence events')
     expect(container.textContent).toContain('unknown')
     expect(screen.getByText('not scored')).toBeTruthy()
   })
 
   it('shows who reviewed an executed action', async () => {
-    const { container } = open('/alerts/a-0001')
+    const { container } = open('/alerts/a-20261105T093000-000001')
     await screen.findByText('Evidence events')
     expect(container.textContent).toContain('lab-analyst')
   })
@@ -333,7 +375,7 @@ describe('approvals', () => {
     expect((await button('Reject')).disabled).toBe(true)
     await typeAnalyst()
     expect((await button('Approve')).disabled).toBe(false)
-    expect(screen.getByRole('link', { name: 'a-0007' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'a-20261105T093000-000007' })).toBeTruthy()
   })
 
   it('approves one action, after confirming', async () => {
@@ -343,7 +385,7 @@ describe('approvals', () => {
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(window.confirm).toHaveBeenCalledOnce()
     expect(posts[0]).toEqual({
-      path: '/decisions/d-0007/approve',
+      path: '/decisions/d-20261105T093000-000007/approve',
       body: { reviewed_by: 'lab-analyst', action: 'request_kill' },
     })
   })
@@ -362,7 +404,7 @@ describe('approvals', () => {
     await typeAnalyst()
     fireEvent.click(await button('Reject'))
     await waitFor(() => expect(posts).toHaveLength(1))
-    expect(posts[0].path).toBe('/decisions/d-0007/reject')
+    expect(posts[0].path).toBe('/decisions/d-20261105T093000-000007/reject')
   })
 
   it('shows a refusal from the backend', async () => {

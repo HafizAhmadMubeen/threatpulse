@@ -1,6 +1,6 @@
 {
-  "report_id": "r-0004",
-  "alert_id": "a-0004",
+  "report_id": "r-20261105T093000-000004",
+  "alert_id": "a-20261105T093000-000004",
   "summary": "reg.exe added a Run key that would start a program at every logon. The change was not approved, so the key was removed. reg.exe had already exited, so nothing was suspended.",
   "techniques": [
     {

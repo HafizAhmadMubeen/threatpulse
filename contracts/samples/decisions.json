@@ -1,7 +1,7 @@
 [
   {
-    "decision_id": "d-0001",
-    "alert_id": "a-0001",
+    "decision_id": "d-20261105T093000-000001",
+    "alert_id": "a-20261105T093000-000001",
     "ts": "2026-11-05T09:30:13.000Z",
     "policy_rules": [
       "P6-delete-request"
@@ -24,8 +24,8 @@
     }
   },
   {
-    "decision_id": "d-0002",
-    "alert_id": "a-0002",
+    "decision_id": "d-20261105T093000-000002",
+    "alert_id": "a-20261105T093000-000002",
     "ts": "2026-11-05T09:31:01.600Z",
     "policy_rules": [],
     "actions": [
@@ -44,8 +44,8 @@
     }
   },
   {
-    "decision_id": "d-0003",
-    "alert_id": "a-0003",
+    "decision_id": "d-20261105T093000-000003",
+    "alert_id": "a-20261105T093000-000003",
     "ts": "2026-11-05T09:32:01.200Z",
     "policy_rules": [
       "P1-lsass-read"
@@ -68,8 +68,8 @@
     }
   },
   {
-    "decision_id": "d-0004",
-    "alert_id": "a-0004",
+    "decision_id": "d-20261105T093000-000004",
+    "alert_id": "a-20261105T093000-000004",
     "ts": "2026-11-05T09:33:01.600Z",
     "policy_rules": [
       "P2-persistence-change",
@@ -99,8 +99,8 @@
     }
   },
   {
-    "decision_id": "d-0005",
-    "alert_id": "a-0005",
+    "decision_id": "d-20261105T093000-000005",
+    "alert_id": "a-20261105T093000-000005",
     "ts": "2026-11-05T09:34:01.100Z",
     "policy_rules": [
       "P2-persistence-change"
@@ -122,8 +122,8 @@
     }
   },
   {
-    "decision_id": "d-0006",
-    "alert_id": "a-0006",
+    "decision_id": "d-20261105T093000-000006",
+    "alert_id": "a-20261105T093000-000006",
     "ts": "2026-11-05T09:35:01.100Z",
     "policy_rules": [
       "P3-ransomware"
@@ -145,8 +145,8 @@
     }
   },
   {
-    "decision_id": "d-0007",
-    "alert_id": "a-0007",
+    "decision_id": "d-20261105T093000-000007",
+    "alert_id": "a-20261105T093000-000007",
     "ts": "2026-11-05T09:35:02.100Z",
     "policy_rules": [
       "P3-ransomware",
@@ -176,8 +176,8 @@
     }
   },
   {
-    "decision_id": "d-0008",
-    "alert_id": "a-0008",
+    "decision_id": "d-20261105T093000-000008",
+    "alert_id": "a-20261105T093000-000008",
     "ts": "2026-11-05T09:36:01.300Z",
     "policy_rules": [
       "P4-exfil"
@@ -198,8 +198,8 @@
     }
   },
   {
-    "decision_id": "d-0009",
-    "alert_id": "a-0009",
+    "decision_id": "d-20261105T093000-000009",
+    "alert_id": "a-20261105T093000-000009",
     "ts": "2026-11-05T09:37:01.500Z",
     "policy_rules": [
       "P4-exfil"
@@ -217,6 +217,26 @@
       "signed": false,
       "trusted_path": false,
       "risk_score": 0.87
+    }
+  },
+  {
+    "decision_id": "d-20261105T093000-000010",
+    "alert_id": "a-20261105T093000-000010",
+    "ts": "2026-11-05T09:38:00.100Z",
+    "policy_rules": [],
+    "actions": [
+      {
+        "action": "alert_only",
+        "automatic": true,
+        "status": "executed",
+        "executed_at": "2026-11-05T09:38:00.100Z"
+      }
+    ],
+    "attributes": {
+      "zone": "none",
+      "signed": false,
+      "trusted_path": false,
+      "risk_score": null
     }
   }
 ]

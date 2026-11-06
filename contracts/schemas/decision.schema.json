@@ -7,11 +7,11 @@
   "required": ["decision_id", "alert_id", "ts", "policy_rules", "actions", "attributes"],
   "properties": {
     "decision_id": {
-      "description": "d-<same counter as the alert>.",
+      "description": "d-<the alert's run start and counter>.",
       "type": "string",
-      "pattern": "^d-[0-9]{4,}$"
+      "pattern": "^d-[0-9]{8}T[0-9]{6}-[0-9]{6,}$"
     },
-    "alert_id": { "type": "string", "pattern": "^a-[0-9]{4,}$" },
+    "alert_id": { "type": "string", "pattern": "^a-[0-9]{8}T[0-9]{6}-[0-9]{6,}$" },
     "ts": {
       "description": "When the decision was made. UTC ISO 8601, milliseconds optional.",
       "type": "string",

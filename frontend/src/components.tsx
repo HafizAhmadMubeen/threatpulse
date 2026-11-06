@@ -14,6 +14,8 @@ export function Telemetry({ value }: { value: string | number | null | undefined
   return <code className="telemetry">{value}</code>
 }
 
+type RiskFields = Pick<Alert, 'layer' | 'risk_score' | 'object' | 'static_analysis'>
+
 export type Severity = 'Confirmed' | 'High' | 'Medium' | 'Low' | 'Not scored'
 
 /**
@@ -23,6 +25,8 @@ export type Severity = 'Confirmed' | 'High' | 'Medium' | 'Low' | 'Not scored'
  * A hash match or a changed protected item is a fact, whatever the behaviour model thinks
  * of the process around it, so it ranks above any score. The EICAR sample is the reason:
  * a confirmed match with a risk score of 0.12 must not look safe.
+ *
+ * The static score plays no part here. It sits beside the badge as a separate fact.
  */
 export function severityOf(alert: Pick<Alert, 'layer' | 'risk_score' | 'object'>): Severity {
   if (alert.layer === 'signature') return 'Confirmed'
@@ -42,14 +46,16 @@ const SEVERITY_CLASSES: Record<Severity, string> = {
 }
 
 /** The score stays uncoloured, so the badge alone carries the meaning. */
-export function RiskScore({ alert }: { alert: Pick<Alert, 'layer' | 'risk_score' | 'object'> }) {
+export function RiskScore({ alert }: { alert: RiskFields }) {
   const severity = severityOf(alert)
   const score = alert.risk_score
+  const staticScore = alert.static_analysis?.score ?? null
   return (
     <span className="risk">
       {score !== null && <span className="score">{score.toFixed(2)}</span>}
       {score === null && severity !== 'Not scored' && <span className="muted">not scored</span>}
       <span className={`badge ${SEVERITY_CLASSES[severity]}`}>{severity}</span>
+      {staticScore !== null && <span className="static-score">Static {staticScore.toFixed(2)}</span>}
     </span>
   )
 }
