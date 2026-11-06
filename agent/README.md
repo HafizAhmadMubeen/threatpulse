@@ -185,6 +185,7 @@ These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A p
 | `tools/run_batch.ps1` | Runs one batch from `tools/batch_plan.json` in its fixed order, and pauses before each manual benign session |
 | `tools/record_session.ps1` | Records one session, and writes `session.json` |
 | `tools/vm_t1486_script.ps1` | Our harmless T1486 test, on dummy files only |
+| `tools/demo_t1486.ps1` | A slow version of that test for the live documents-zone demo, never used for recording. It pauses 100 ms between files (`-PauseMilliseconds`), takes `-FileCount`, keeps the process alive for `-HoldSeconds` so containment can reach it, and with `-NoCleanup` leaves its dummy files in `Documents\ThreatPulseDemo`. `-Cleanup` reports how many files were locked, then removes the folder |
 | `tools/vm_benign_admin.ps1`, `tools/vm_benign_zip.ps1` | Scripted benign activities |
 | `tools/make_batch_plan.py` | Generated `batch_plan.json`, from a recorded seed |
 | `tools/label_session.py` | Writes `labels.csv`, with a `part` column, for one session or a whole batch |
