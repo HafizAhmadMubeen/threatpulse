@@ -1,0 +1,41 @@
+# T1003.001 OS Credential Dumping: LSASS Memory (lsass zone).
+# With LSA protection on, Windows denies the read and the sensor sees no process_access
+# event (PLANNING.md 4.3). So there are two rules: the access itself, and the attempt.
+- id: R-T1003-001
+  title: Process opened LSASS with memory-read rights
+  description: >
+    Sysmon Event ID 10: a process opened lsass.exe with vm_read. Many Windows components
+    do this legitimately, so this rule has no allowlist. The policy engine owns the
+    allowlist and starts in learning mode.
+  layer: rule
+  zone: lsass
+  techniques: [T1003.001]
+  dedupe_by: [pid]
+  detection:
+    selection:
+      event_type: process_access
+      target.path|endswith: '\lsass.exe'
+      target.access_rights: vm_read
+    filter:
+      process.image|endswith: '\lsass.exe'
+    condition: selection and not filter
+
+- id: R-T1003-002
+  title: Command line that dumps LSASS memory
+  description: >
+    A process started with a command line that dumps LSASS: the comsvcs.dll MiniDump
+    export, or a dump tool pointed at lsass. It fires even when Windows blocks the read.
+    It can't fire when the command line could not be read (null).
+  layer: rule
+  zone: lsass
+  techniques: [T1003.001]
+  dedupe_by: [pid]
+  detection:
+    selection:
+      - event_type: process_start
+        process.cmdline|contains_all: ['comsvcs', 'minidump']
+      - event_type: process_start
+        process.cmdline|contains_all: ['lsass', ' -ma ']
+      - event_type: process_start
+        process.cmdline|contains: 'sekurlsa::'
+    condition: selection

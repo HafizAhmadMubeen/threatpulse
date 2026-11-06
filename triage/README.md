@@ -1,0 +1,49 @@
+# ThreatPulse triage: features for the behavioural model
+
+`triage/features.py` is PHASES.md step 2.8. It turns a recorded session into one row per **process tree**, ready for XGBoost (step 3.4). No model is trained here.
+
+```bash
+uv run python -m triage.features <session folder> [<session folder> ...] --out features.csv
+```
+
+A session folder is what `agent/tools/record_session.ps1` and `label_session.py` produce: `events.jsonl`, `fim.jsonl`, `labels.csv` and `session.json`. `fim.jsonl` and `labels.csv` are optional. Without labels, rows say `unlabelled`. `session.json` must have `session_id`, `pool`, `batch` and `network`.
+
+## What counts as a process tree
+
+A **root** is a process whose parent has no `process_start` in the session. A tree is a root and everything it started. The label never decides this, and `root_pid` from `session.json` is not used. If it were, attack trees and benign trees would differ by construction, and the model could learn that instead of behaviour.
+
+- A process that was already running when recording began has no start event. It gets one row with `observed_start` 0. So do the processes it later starts, as their own roots.
+- A reused pid is a new process, so it gets a new tree.
+- **Every tree is written.** Which ones to train on is decided in step 3.4, using `observed_start`. Keeping unobserved processes in training could teach the model that "no start event" means benign.
+- `System` and `Registry` write cache flushes that aren't an application's own writes (see `agent/README.md`). They are separate trees with `observed_start` 0.
+
+## Columns
+
+`METADATA_COLUMNS` are for splitting and reporting. **They are never features.** `network` in particular could become a shortcut for the label, since only T1105 needs NAT.
+
+| Group | Features | Source |
+|---|---|---|
+| Tree shape | processes, children of the root, depth, duration | ETW |
+| Activity | counts and per-second rates of file create, write, rename, delete, registry set, network connect. Peak file operations in 10 s and peak deletes and renames in 30 s | ETW only |
+| Network shape | distinct destination addresses and ports, as counts | ETW only |
+| Zones touched | events in document folders, Run key writes, Startup folder and hosts file events, and how many of the four zones were touched | ETW |
+| Sysmon signals | LSASS access, `vm_read`, network connections, Run key writes and deletes | Sysmon |
+| Signing | unsigned processes, signed fraction, whether the root is signed | ETW |
+| FIM | FIM changes linked to a write by this tree | `fim.jsonl` |
+
+- **Counts and rates use ETW only,** so one action is never counted twice (PLANNING.md Section 10). Sysmon gives zone signals.
+- **No names, paths or command lines are features.** Paths and keys only answer "which zone is this", through `detection/zones.py`, and the answer leaves as a number. A test renames every image, command line, file name, extension, address and registry value, and checks that no feature changes.
+- **Not features, on purpose:** `trusted_path`, rule matches, file extensions, and anything about a name. Rule matches stay out so that what we know about held-out techniques can't leak into the model.
+- **FIM links.** A change is linked to the tree that last wrote that exact item within 120 seconds before it. FIM doesn't say who made a change, so this is the only link. Keys are compared ignoring case and `HKU\<sid>` vs `HKCU`.
+
+## Known limits
+
+- **LSASS features may be all 0 in the real data.** With LSA protection on, Windows denies the read and the sensor sees no access event (PLANNING.md 4.3).
+- **T1053.005's task runs outside the launcher's tree,** so only the part that creates it is in the attack tree.
+- **A wrapper process can mix benign and malicious children in one tree.** The tree's label is malicious if any of its events is, and `n_malicious_events` is written so the mix can be seen.
+- **The FIM key form is unchecked on real data.** FIM and ETW must write a key the same way for linking to work. The first real recordings will show if they do. If not, `n_fim_changes_linked` will be 0 everywhere.
+- **Zone patterns are a first list.** `detection/zones.py` lists the document folders, which a user's own folders could escape.
+
+```bash
+uv run pytest tests/test_features.py
+```

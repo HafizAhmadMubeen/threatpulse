@@ -1,0 +1,26 @@
+# T1685 Disable or Modify Tools (held-out technique). Replaces the revoked T1562.001.
+# Writes to Defender's own settings by anything other than Defender itself.
+- id: R-T1685-001
+  title: Windows Defender settings changed
+  description: >
+    A process wrote Defender policy keys, an exclusion, or a real-time protection or tamper
+    protection value. Defender's own writes are excluded by the agent's filters and again here.
+  layer: rule
+  zone: none
+  techniques: [T1685]
+  dedupe_by: [pid, target.registry_key]
+  detection:
+    selection:
+      - event_type: registry_set
+        target.registry_key|contains: '\Policies\Microsoft\Windows Defender'
+      - event_type: registry_set
+        target.registry_key|contains: '\Windows Defender\Exclusions\'
+      - event_type: registry_set
+        target.registry_key|contains: '\Windows Defender\Real-Time Protection\Disable'
+      - event_type: registry_set
+        target.registry_key|contains: '\Windows Defender\Features\TamperProtection'
+    filter:
+      process.image|startswith:
+        - 'C:\Program Files\Windows Defender\'
+        - 'C:\ProgramData\Microsoft\Windows Defender\'
+    condition: selection and not filter

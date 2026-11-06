@@ -1,0 +1,36 @@
+# T1105 Ingress Tool Transfer (network zone).
+# Behaviour: a program that can download connects out, then writes a file within 30 seconds.
+- id: R-T1105-001
+  title: Download-capable program connected out, then wrote a file
+  description: >
+    The same process made an outbound connection and then created or wrote a file. This
+    is common for installers and updaters too, so the starting threshold is untested
+    against benign recordings.
+  layer: rule
+  zone: network
+  techniques: [T1105]
+  dedupe_by: [pid]
+  type: sequence
+  sequence:
+    within_seconds: 30
+    group_by: pid
+    steps:
+      - selection:
+          event_type: network_connect
+          process.image|endswith:
+            - '\powershell.exe'
+            - '\pwsh.exe'
+            - '\curl.exe'
+            - '\certutil.exe'
+            - '\bitsadmin.exe'
+            - '\mshta.exe'
+            - '\wscript.exe'
+            - '\cscript.exe'
+        condition: selection
+      - selection:
+          event_type: [file_create, file_write]
+        filter:
+          target.path|contains:
+            - '\Microsoft\Windows\PowerShell\'
+            - '\WindowsPowerShell\'
+        condition: selection and not filter

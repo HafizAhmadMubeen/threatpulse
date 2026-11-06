@@ -88,3 +88,52 @@ These aren't doc edits, but nothing enforces them yet, because the code doesn't 
 | A, `policy.execute` | Keep `reviewed_by` and `reviewed_at` when moving an action to `executed` or `failed` |
 | A, `policy/` | Never import `backend.rag` |
 | C, `write_report` | Use `build_messages`, so telemetry stays escaped and only high-risk alerts reach the LLM |
+
+---
+
+# Added on `track-b/rules` (steps 2.7 and 2.8)
+
+Everything above is unchanged. These come from `detection/behaviour.py`, `rules/behaviour/` and `triage/features.py`.
+
+## CLAUDE.md
+
+1. **Tech stack:** add `PyYAML (safe_load only)` to the Detection line.
+2. **Team and tracks table:** `triage/` is also where the feature extractor lives.
+3. **ML rules:** add that the feature extractor writes network mode, pool, batch and label as metadata columns that are never features, and that trees are built from parents and never from the label.
+
+## README.md
+
+1. **Repo layout:** `rules/behaviour/` holds the Sigma-style YAML rules, one file per technique.
+
+## PLANNING.md
+
+1. **Section 6, Gate 3:** two lines worth adding.
+   - `A behaviour rule that needs a command line can't fire when the command line is null, which is common for short-lived processes such as reg.exe.`
+   - `R-T1003-002 exists because of LSA protection: it catches the dump attempt when the read is denied and no process_access event is recorded.`
+2. **Section 10, Decided:** add these rows.
+   - `| Process tree | A root is a process whose parent has no process_start in the session. The label and root_pid never decide it. Processes already running when recording began are written with observed_start 0, and step 3.4 decides whether to train on them |`
+   - `| Behaviour rules | Sigma-style YAML, plain text matching with no regular expressions, one alert per process and key. Thresholds are starting guesses: 10 deletes or renames in 30 seconds (T1486), connect then file write within 30 seconds (T1105) |`
+   - `| Rule engine | match_rules(event) keeps state, so events must be replayed in time order. detection/replay.py does this |`
+3. **Section 9 Risks:** add `Behaviour rule thresholds are untested on benign data | Gate 3 requires each rule to be checked against the benign sessions, and false positives are documented`.
+4. **Section 8.1 or 4.3:** T1053.005 and T1218.011 rules see only the launcher's part of the technique. State this where the held-out results are described.
+
+## PHASES.md
+
+1. **Step 2.7:** the gate "each rule fires on its sample event" is met by tests that build their own events, since the shared samples contain only 6 of the 13 rules' behaviours. The 13 rules are in `detection/README.md`.
+2. **Step 2.8:** the output is one row per process tree, written by `python -m triage.features`. The input is a session folder as written by `record_session.ps1` and `label_session.py`.
+3. **Step 3.4:** filter on `observed_start`, split by `session_id`, and do not use `network`, `pool`, `batch` or `technique` as features. Use `pool` to find the held-out techniques.
+4. **Step 3.9:** FIM alerts (`layer: fim`) have no process. The orchestrator links one using the tree that last wrote the item, as `triage/features.py` does for features.
+5. **Step 1.10 or 4.3:** `python -m detection.replay events.jsonl fim.jsonl` replays a recorded session through the rules.
+
+## ROADMAP.md
+
+1. **Section 2, Alert conventions:** `match_rules` alerts have `layer` `rule` or `fim`, `risk_score` null, and `rule_id` `R-<technique>-<number>`. FIM alerts have no process.
+2. **Section 2, `match_rules(event)`:** add that it keeps state, and events must arrive in time order.
+
+## Not docs: code rules for other tracks
+
+| Track | Rule |
+|---|---|
+| A, `agent/` | Check that FIM writes a registry key the same way as ETW. `triage/features.py` links FIM changes to writers by exact key |
+| A, `policy/` | The LSASS allowlist belongs in the policy engine. The behaviour rule has none |
+| A, `policy/` | Treat `layer: fim` alerts with `subject.pid` 0 like any other no-process alert |

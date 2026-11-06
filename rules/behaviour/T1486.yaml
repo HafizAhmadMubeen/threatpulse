@@ -1,0 +1,35 @@
+# T1486 Data Encrypted for Impact (documents zone).
+# Ransomware replaces or removes many user files fast. Counting beats looking at names:
+# our own test script writes .locked copies and deletes the originals, with no rename.
+- id: R-T1486-001
+  title: Many user files deleted or renamed by one process
+  description: >
+    One process deleted or renamed 10 or more files in user document folders within 30
+    seconds. A ransomware that stops after 9 files is not caught, which is what the
+    "files lost before containment" metric measures. Archivers and cleanup tools can
+    also trip this, so the threshold is a starting guess.
+  layer: rule
+  zone: documents
+  techniques: [T1486]
+  type: threshold
+  threshold:
+    count: 10
+    window_seconds: 30
+    group_by: pid
+  detection:
+    selection:
+      source: etw
+      event_type: [file_delete, file_rename]
+      target.path|contains:
+        - '\Documents\'
+        - '\Desktop\'
+        - '\Pictures\'
+        - '\Videos\'
+        - '\Music\'
+    filter:
+      target.path|contains:
+        - '\AppData\'
+        - '\Windows\'
+        - '\Program Files'
+        - '\ProgramData\'
+    condition: selection and not filter
