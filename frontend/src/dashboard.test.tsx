@@ -46,7 +46,7 @@ function fixtures(): Fixtures {
       alerts_not_scored: 1,
       alerts_by_layer: { signature: 1, heuristic: 1, fim: 2, rule: 4, ml: 1 },
       alerts_by_zone: { documents: 2, persistence: 2, lsass: 1, network: 2, none: 2 },
-      actions_by_status: { executed: 8, failed: 0, skipped: 2, awaiting_approval: 1, approved: 0, rejected: 0 },
+      actions_by_status: { pending: 0, executed: 8, failed: 0, skipped: 2, awaiting_approval: 1, approved: 0, rejected: 0 },
       pending_approvals: 1,
       fim_changes_pending: 2,
       reports_total: 8,

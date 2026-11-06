@@ -52,8 +52,9 @@
       "description": "Includes analyst reviews from the local review store.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["executed", "failed", "skipped", "awaiting_approval", "approved", "rejected"],
+      "required": ["pending", "executed", "failed", "skipped", "awaiting_approval", "approved", "rejected"],
       "properties": {
+        "pending": { "$ref": "#/$defs/count" },
         "executed": { "$ref": "#/$defs/count" },
         "failed": { "$ref": "#/$defs/count" },
         "skipped": { "$ref": "#/$defs/count" },

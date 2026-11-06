@@ -450,7 +450,7 @@ class RuleEngine:
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             return {**NO_PROCESS, "ancestors": []}
         image = process.get("image")
-        return {
+        subject = {
             "pid": pid,
             "image": image if isinstance(image, str) and image else "unknown",
             "signed": process.get("signed") is True,
@@ -458,6 +458,11 @@ class RuleEngine:
             "trusted_path": zones.is_trusted_image(image),
             "ancestors": self._ancestors(event),
         }
+        # Copied only when the agent sent it. Absent means unknown, which the policy
+        # engine treats differently from false, so it is never filled in with a guess.
+        if isinstance(process.get("microsoft_root"), bool):
+            subject["microsoft_root"] = process["microsoft_root"]
+        return subject
 
     def _alert(self, rule: Rule, event: dict, when: float, evidence: list[str]) -> dict | None:
         target = event["target"]

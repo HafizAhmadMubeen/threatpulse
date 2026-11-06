@@ -12,13 +12,21 @@
       "automatic": true,
       "status": "skipped",
       "reason": "process already suspended",
-      "executed_at": null
+      "executed_at": null,
+      "target": {
+        "pid": 6120,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
     },
     {
       "action": "request_kill",
       "automatic": false,
       "status": "rejected",
-      "executed_at": null
+      "executed_at": null,
+      "target": {
+        "pid": 6120,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
     }
   ],
   "attributes": {

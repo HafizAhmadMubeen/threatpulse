@@ -12,6 +12,7 @@
     "signed": true,
     "signer": "Microsoft Windows",
     "trusted_path": true,
+    "microsoft_root": true,
     "ancestors": [
       {
         "pid": 3120,

@@ -118,6 +118,7 @@ def ev(process, event_type, source, seconds, **values):
             "sha256": process.sha,
             "signed": process.signed,
             "signer": process.signer,
+            "microsoft_root": microsoft_root(process),
         },
         "target": target(**values),
     }
@@ -144,6 +145,12 @@ def fim(seconds, kind, old, new, path=None, registry_key=None):
     return event["event_id"]
 
 
+def microsoft_root(process):
+    """What the agent would report: true only for a verified signature whose chain ends at a
+    Microsoft root. The signer text alone proves nothing, so an unsigned file is false."""
+    return bool(process.signed and process.signer in (MS_WINDOWS, "Microsoft Corporation"))
+
+
 def subject(process, *ancestors):
     return {
         "pid": process.pid,
@@ -151,6 +158,7 @@ def subject(process, *ancestors):
         "signed": process.signed,
         "signer": process.signer,
         "trusted_path": process.trusted,
+        "microsoft_root": microsoft_root(process),
         "ancestors": [{"pid": a.pid, "image": a.image} for a in ancestors],
     }
 
@@ -195,6 +203,9 @@ def act(action, status, at=None, reason=None, reviewed_by=None, reviewed_at=None
 
 def decide(number, seconds, rules, actions, **extra):
     source = alerts[number - 1]
+    for entry in actions:  # actions aimed at a process name it, as policy.decide does
+        if entry["action"] in ("suspend", "block_network", "request_kill") and source["subject"]["pid"] > 0:
+            entry["target"] = {"pid": source["subject"]["pid"], "image": source["subject"]["image"]}
     decisions.append({
         "decision_id": sample_id("d", number),
         "alert_id": source["alert_id"],
@@ -476,6 +487,18 @@ def invalid():
     item = by_id(decisions, "decision_id", sample_id("d", 7))
     item["actions"][1]["reviewed_by"] = "lab-analyst"
     out["decision_awaiting_with_reviewer"] = item
+
+    item = by_id(decisions, "decision_id", sample_id("d", 6))
+    item["actions"][0].update(status="pending", executed_at=ts(301.15))
+    out["decision_pending_with_time"] = item
+
+    item = by_id(decisions, "decision_id", sample_id("d", 7))
+    item["actions"][1]["status"] = "pending"
+    out["decision_request_kill_pending"] = item
+
+    item = by_id(decisions, "decision_id", sample_id("d", 6))
+    item["actions"][0]["target"] = {"pid": 6120}
+    out["decision_target_without_image"] = item
 
     item = by_id(decisions, "decision_id", sample_id("d", 7))
     item["actions"][1]["status"] = "rejected"

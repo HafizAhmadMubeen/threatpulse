@@ -13,6 +13,7 @@
       "signed": true,
       "signer": "Microsoft Windows",
       "trusted_path": true,
+      "microsoft_root": true,
       "ancestors": [
         {
           "pid": 3120,
@@ -54,6 +55,7 @@
       "signed": false,
       "signer": null,
       "trusted_path": false,
+      "microsoft_root": false,
       "ancestors": [
         {
           "pid": 4100,
@@ -102,6 +104,7 @@
       "signed": true,
       "signer": "Microsoft Corporation",
       "trusted_path": false,
+      "microsoft_root": true,
       "ancestors": [
         {
           "pid": 5188,
@@ -145,6 +148,7 @@
       "signed": true,
       "signer": "Microsoft Windows",
       "trusted_path": true,
+      "microsoft_root": true,
       "ancestors": [
         {
           "pid": 5310,
@@ -212,6 +216,7 @@
       "signed": true,
       "signer": "Microsoft Windows",
       "trusted_path": true,
+      "microsoft_root": true,
       "ancestors": [
         {
           "pid": 4100,
@@ -255,6 +260,7 @@
       "signed": true,
       "signer": "Microsoft Windows",
       "trusted_path": true,
+      "microsoft_root": true,
       "ancestors": [
         {
           "pid": 4100,
@@ -295,6 +301,7 @@
       "signed": true,
       "signer": "Microsoft Windows",
       "trusted_path": true,
+      "microsoft_root": true,
       "ancestors": [
         {
           "pid": 4100,
@@ -334,6 +341,7 @@
       "signed": false,
       "signer": null,
       "trusted_path": false,
+      "microsoft_root": false,
       "ancestors": [
         {
           "pid": 4100,

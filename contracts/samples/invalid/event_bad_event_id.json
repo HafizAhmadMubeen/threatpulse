@@ -12,7 +12,8 @@
     "user": "LAB-VM-01\\lab",
     "sha256": "cc97c6c938ff5abe74231f9c6264acfa884415568b006c682b4af00a55324f4a",
     "signed": true,
-    "signer": "Microsoft Windows"
+    "signer": "Microsoft Windows",
+    "microsoft_root": true
   },
   "target": {
     "path": null,

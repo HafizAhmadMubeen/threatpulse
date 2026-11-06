@@ -17,7 +17,11 @@
       "action": "suspend",
       "automatic": true,
       "status": "skipped",
-      "executed_at": null
+      "executed_at": null,
+      "target": {
+        "pid": 5332,
+        "image": "C:\\Windows\\System32\\reg.exe"
+      }
     }
   ],
   "attributes": {

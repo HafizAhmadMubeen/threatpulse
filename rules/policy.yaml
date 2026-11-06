@@ -1,0 +1,78 @@
+# ThreatPulse policy rules (PLANNING.md Section 5.6), read by policy.decide.
+# Every key is required, and an unknown key stops startup (policy/loader.py).
+
+thresholds:
+  auto_contain: 0.80     # suspend / block network
+  request_kill: 0.95     # ask the analyst to approve killing a suspended process
+  alert: 0.50            # dashboard severity only. No rule reads it: the default is alert_only
+
+# How long a FIM change must stay different from the baseline before it is restored,
+# so a short remove-and-re-add such as Edge's autolaunch Run value is not fought over.
+fim_debounce_seconds: 2
+
+# Folders whose programs count as trusted_path. Detection computes that attribute with
+# the same list (detection/zones.py). A test keeps the two in step.
+trusted_dirs:
+  - 'C:\Windows\System32\'
+  - 'C:\Program Files\'
+  - 'C:\Program Files (x86)\'
+
+# Never suspended, never blocked, never offered for kill, whatever the risk score.
+# Matched by FULL PATH plus a verified Microsoft signature, never by name alone
+# (malware can be named svchost.exe and placed on the Desktop).
+# `signature: microsoft` is the default. The agent sets process.microsoft_root only when
+# the signature verified and the chain ends at a Microsoft root, and the signer text is
+# never used. `*` stands for one whole folder name.
+never_suspend:
+  - { system: true }                                    # System, pid 4
+  - { path: 'C:\Windows\System32\smss.exe' }
+  - { path: 'C:\Windows\System32\csrss.exe' }
+  - { path: 'C:\Windows\System32\wininit.exe' }
+  - { path: 'C:\Windows\System32\winlogon.exe' }
+  - { path: 'C:\Windows\System32\services.exe' }
+  - { path: 'C:\Windows\System32\lsass.exe' }
+  - { path: 'C:\Windows\System32\svchost.exe' }
+  - { path: 'C:\Windows\explorer.exe' }
+  - { path: 'C:\ProgramData\Microsoft\Windows Defender\Platform\*\MsMpEng.exe' }
+  - { path: 'C:\Windows\Sysmon64.exe' }
+  # Our own programs are not Microsoft-signed, so each is listed by its exact path with
+  # `signature: none`. Not the whole C:\ThreatPulseLab\ tree. An administrator can replace
+  # these exact files (policy/README.md). Track A confirms the paths on the VM.
+  - { path: 'C:\ThreatPulseLab\threatpulse\agent\build\Release\threatpulse_agent.exe', signature: none }
+  - { path: 'C:\ThreatPulseLab\threatpulse\agent\.venv\Scripts\python.exe', signature: none }
+
+lsass_mode: learning     # learning = alert_only; enforcing = suspend
+# Filled from benign recordings before switching to enforcing. Same entry format as
+# never_suspend. A process whose microsoft_root is unknown is NOT allowlisted.
+lsass_allowlist: []
+
+rules:
+  - id: P1-lsass-read
+    when: { event_type: process_access, zone: lsass, access_includes: vm_read, in_lsass_allowlist: false }
+    actions: [suspend]           # alert_only while lsass_mode = learning
+
+  - id: P2-persistence-change
+    when: { zone: persistence, change_approved: false }
+    actions: [restore]           # every unapproved change, whoever made it, once it has settled
+
+  - id: P2b-persistence-origin
+    when: { zone: persistence, risk_score_gte: auto_contain }
+    actions: [suspend]           # highest-risk live process in the writer's tree; skipped if all exited
+
+  - id: P3-ransomware
+    when: { zone: documents, risk_score_gte: auto_contain }
+    actions: [suspend]
+
+  - id: P4-exfil
+    when: { event_type: network_connect, risk_score_gte: auto_contain }
+    actions: [block_network]
+
+  - id: P5-kill-request
+    when: { already_suspended: true, risk_score_gte: request_kill }
+    actions: [request_kill]      # waits for analyst approval
+
+  - id: P6-delete-request
+    when: { layer: signature }   # a file matched the hash list or YARA
+    actions: [request_delete]    # waits for analyst approval
+
+default: [alert_only]
