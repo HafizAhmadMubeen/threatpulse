@@ -3,7 +3,7 @@
 Order of work for each event, in time order:
   1. update what we remember (processes, writers, FIM state)
   2. match_rules (stateful), and a hash-list check of a started process's own SHA-256
-  3. score_process for the alert's process tree  (STUB: always None)
+  3. score_process for the alert's process tree  (None without a model in triage/models/)
   4. decide(alert, context)                      (PLANS only: automatic actions stay pending)
   5. write_report, only for a high-risk alert    (STUB: no LLM)
 
@@ -33,6 +33,7 @@ from detection.scanner import scan_file
 from detection.timeline import format_ts, read_jsonl
 from policy import decide
 from policy.engine import default_policy
+from triage.features import events_of_tree_containing
 from triage.score import score_process
 
 log = logging.getLogger(__name__)
@@ -223,7 +224,8 @@ class Replay:
     # ---- scoring and context ------------------------------------------------------
 
     def score(self, proc: Proc) -> float | None:
-        value = self.scorer(proc.tree_events())
+        # The tree training saw: the process's own tree, not everything up to an unobserved root.
+        value = self.scorer(events_of_tree_containing(proc.tree_events(), proc.pid))
         if value is not None and not (isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1):
             raise PipelineError(f"score_process returned {value!r}, not a number from 0 to 1 or None")
         return value

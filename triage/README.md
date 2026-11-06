@@ -1,6 +1,6 @@
-# ThreatPulse triage: features for the behavioural model
+# ThreatPulse triage: features and the behavioural model
 
-`triage/features.py` is PHASES.md step 2.8. It turns a recorded session into one row per **process tree**, ready for XGBoost (step 3.4). No model is trained here.
+`triage/features.py` is PHASES.md step 2.8. It turns a recorded session into one row per **process tree**. `triage/train.py` and `triage/score.py` are steps 3.4 and 3.5: [training and scoring](#training-and-scoring-steps-34-and-35), **preliminary**.
 
 ```bash
 uv run python -m triage.features <session folder> [<session folder> ...] --out features.csv
@@ -71,3 +71,53 @@ A **root** is a process whose parent has no `process_start` in the session. A tr
 ```bash
 uv run pytest tests/test_features.py
 ```
+
+## Training and scoring (steps 3.4 and 3.5)
+
+**PRELIMINARY. 2 of 11 batches exist, with 5 training positives per batch. These results show that the pipeline works. They do not say how well the model detects.** Batch 3 waits for Track A to decide which of its two overlapping sets to use.
+
+```bash
+uv run python -m triage.train \
+  --batch 1 /mnt/e/threatpulse-data/vm-export/batch-01 /mnt/e/threatpulse-data/vm-export/batch-01-labels-v3 \
+  --batch 2 /mnt/e/threatpulse-data/vm-export/batch-02 /mnt/e/threatpulse-data/vm-export/batch-02-labels-v2 \
+  --out data/runs/training-prelim            # --no-save to skip writing triage/models/
+```
+
+Inputs are only read, and `--out` inside an input is refused. It writes `report.json` and `report.txt`, and saves the model to `triage/models/` (gitignored).
+
+**What goes into the training set** (`triage/dataset.py`)
+- Features from the test part only: the harness is left out, and events before each session's `start_utc` are dropped (sensor start and warm-up). Labels come from the separate labels folder, since each recording's own `labels.csv` is the old one.
+- Positives are trees with test-part malicious events. Negatives are every benign tree, including the background trees of attack sessions.
+- Only trees whose start was observed are used. The rest are listed in the class-balance table as dropped.
+- **Split by whole batch.** Each batch is tested in turn by a model trained on the others. Never by event or by session.
+- **Held-out techniques** (T1053.005, T1685, T1218.011) are only evaluated. A held-out session is kept out of training whole, background trees included, and a loader check stops the run if a session's pool and technique disagree. T1685 has no recording yet.
+- Class weights: positives weigh `negatives / positives`. That makes the scores **uncalibrated**: they rank trees and are not probabilities, so the policy's 0.80 threshold means something else here and must be re-chosen on all 11 batches.
+
+**The model** (`triage/model.py`)
+- XGBoost, depth 3, 60 rounds, fixed in advance. Nothing is tuned on test or held-out data.
+- `MODEL_FEATURES` is `FEATURE_COLUMNS` without `n_fim_changes_linked`: a tree's own events (what `score_process` receives) hold no FIM events, so at scoring time it would always be 0. The policy's persistence rule handles FIM changes whatever the score is.
+- Saved as XGBoost JSON, never pickle. A sidecar `.meta.json` holds the feature order, the training batches and sessions, and the model's SHA-256. This catches a damaged or mismatched file. It is not a signature: whoever can write the folder can write both.
+
+**`score_process`** returns `None` (never 0.0) when there is no model, the model is damaged or has other features, the events are not one single tree whose start was observed, or anything is malformed. The pipeline passes it the tree that contains the alerting process, cut at an unobserved parent the way training cuts trees (`events_of_tree_containing`). `score.is_stub()` says whether a model is loaded; tests use an empty model folder (`tests/conftest.py`).
+
+### Preliminary results (batches 1 and 2, 2026-11-07)
+
+Balance of usable trees: batch 1 has 5 training positives and 117 negatives (220 trees dropped for no start event), batch 2 has 5 and 44 (162 dropped). Held-out: 2 positives and 1 negative in batch 1, 2 and 7 in batch 2.
+
+| Train on, test on | Test trees | Precision | Recall | False-positive rate |
+|---|---|---|---|---|
+| batch 2, test batch 1 | 5 + / 117 − | 0.29 (0.13 to 0.53), 5 of 17 flagged | 1.00 (0.57 to 1.0), 5 of 5 | 0.10 (0.06 to 0.17), 12 of 117 |
+| batch 1, test batch 2 | 5 + / 44 − | 1.00 (0.51 to 1.0), 4 of 4 flagged | 0.80 (0.38 to 0.96), 4 of 5 | 0.00 (0 to 0.08), 0 of 44 |
+
+Same at 0.50 and 0.80. Brackets are Wilson 95% intervals. Held-out techniques, scored by the model trained on the other batch:
+
+| Test batch | T1218.011 | T1053.005 | Negatives flagged |
+|---|---|---|---|
+| 1 | 0.96 | 0.98 | 0 of 1 |
+| 2 | 0.84 | 0.76 | 0 of 7 (recall at 0.80 is 1 of 2) |
+
+- **The 12 false positives** are tiny benign trees (2 to 15 events, 1 to 3 processes, under 3 s) in the two benign sessions. The attack trees are tiny as well (2 to 14 events), and 44 training negatives from one batch do not cover that shape.
+- **Missed:** the T1003.001 tree (2 events, 0.12) when training on batch 1. LSA protection blocked the dump, so there is almost nothing to see.
+- **Score as a tree grows.** The gap is **large**. For example T1547.001 scores 0.26 or 0.12 on its first 10% of events and 0.98 on all of them, while a benign tree can score 0.95 to 0.98 on its first 10% to 25%. Early alert-time scores are not usable, and training on prefix snapshots is the next step, as agreed.
+- **Pipeline replay at alert time:** every scored alert gets 0.88 to 0.98, including benign sessions (Edge's autolaunch). The replay tree still holds the wrapper that runs each test, which training left out, and the tree is partial. **With the model loaded, the replay plans `suspend` for benign Edge alerts, so do not let this model's scores drive policy yet.**
+- The scoring path and the training path give the same features (maximum difference 0.0, tested).

@@ -13,6 +13,7 @@ from pathlib import Path
 from backend.pipeline.output import write_merged, write_session
 from backend.pipeline.run import run_session
 from detection.entropy import FileSampler
+from triage import score
 
 
 def expand(folders: list[Path]) -> list[Path]:
@@ -56,8 +57,9 @@ def main(argv: list[str] | None = None) -> int:
         if out == folder.resolve() or folder.resolve() in out.parents:
             parser.error(f"--out must not be inside an input folder: {folder}")
 
-    print("NOTE: score_process and write_report are STUBS: every risk_score is null, and decisions stay pending.",
-          file=sys.stderr)
+    scorer = ("STUB (no model in triage/models/): every risk_score is null"
+              if score.is_stub() else "a PRELIMINARY model: scores are uncalibrated")
+    print(f"NOTE: score_process is {scorer}; write_report is a STUB. Decisions stay pending.", file=sys.stderr)
     results, summaries = [], []
     for folder in sessions:
         result = run_session(folder, scan_files=args.scan_files,

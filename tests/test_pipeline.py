@@ -234,10 +234,9 @@ def delete_session(tmp_path, count=12):
     return recording
 
 
-def test_the_scorer_is_a_stub_that_says_not_scored():
-    assert score.IS_STUB is True
+def test_without_a_model_the_scorer_says_not_scored():
+    assert score.is_stub() is True  # tests/conftest.py points the scorer at an empty folder
     assert score.score_process([{"anything": 1}]) is None
-    assert "STUB" in score.score_process.__doc__
 
 
 def test_with_the_stub_nothing_has_a_risk_score_and_nothing_is_contained(tmp_path):

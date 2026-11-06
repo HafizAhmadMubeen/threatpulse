@@ -15,6 +15,7 @@ from backend.pipeline.run import SessionResult
 from contracts.validate_samples import load_validators
 from detection.session_report import part_of, read_labels
 from detection.timeline import read_jsonl
+from triage import score
 
 FIM_NOTE = (
     "APPROXIMATION: the VM's baseline.json is not in the exported recordings, so an item's "
@@ -77,7 +78,12 @@ def summarise(result: SessionResult, labels: dict[str, dict], labels_used: str) 
                 "no file reader (replay outside the lab VM): every R-T1486-001 burst is 'unknown', "
                 "so R-T1486-002 is never raised"
             ),
-            "scorer": "STUB: score_process returns None, so every risk_score is null",
+            "scorer": (
+                "STUB: no model in triage/models/, so score_process returns None and every risk_score is null"
+                if score.is_stub() else
+                "model: preliminary XGBoost (triage/README.md). Scores rank trees, they are not probabilities. "
+                "A replay tree includes the wrapper that runs each test, which training left out"
+            ),
             "report_writer": "STUB: no LLM call",
             "suspended_pids": "always empty: nothing is executed, decisions stay pending",
             "fim_baseline": FIM_NOTE,

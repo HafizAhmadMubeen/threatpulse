@@ -282,3 +282,35 @@ Apply after `track-a/atomic`, `track-a/policy-engine` and `track-c/orchestrator`
 1. Make the T1486 test script write at least 512 bytes per output file, or the verdict stays unknown.
 2. Run the VM steps in `detection/VM_TEST_PLAN.md` and send back the entropy numbers.
 3. Keep zip/extract sessions in the benign set, and record one where the extracted files stay on disk.
+
+# Added on `track-b/training` (PHASES steps 3.4 and 3.5)
+
+Apply after the earlier branches merge. **All results are preliminary: 2 of 11 batches.**
+
+## CLAUDE.md
+1. **Tech stack, Triage line:** `Python, XGBoost (xgboost-cpu, CPU only, no scikit-learn).`
+2. **ML rules:** add that the model leaves out `n_fim_changes_linked` (a tree's own events hold no FIM events), is saved as JSON and never pickle, and that class weights make scores uncalibrated.
+
+## README.md
+3. **Setup / layout:** `triage/models/` holds the trained model (gitignored). `python -m triage.train` writes it.
+
+## PLANNING.md
+4. **Section 10, Decided:** `| Triage model | XGBoost, depth 3, 60 rounds, fixed in advance. Class weight negatives/positives. Scores are uncalibrated |`; `| Training set | Test-part trees positive. Attack-session background trees and benign trees negative. Events before start_utc dropped. Only trees with an observed start |`; `| Split | By whole batch. Held-out techniques (T1053.005, T1685, T1218.011) are evaluation only, and a held-out session is kept out of training whole |`; `| Model file | XGBoost JSON with a SHA-256 sidecar, never pickle |`.
+5. **Section 8.3 (metrics):** results are per process tree, with Wilson 95% intervals, for precision, recall and false-positive rate, at 0.50 and 0.80. First results (batches 1 and 2) are in `triage/README.md`. Say they are preliminary.
+6. **Section 5.6 / thresholds:** the 0.80 `auto_contain` threshold was set before any model existed. Class weights shift the scores, so re-choose it on all 11 batches.
+7. **Section 9 Risks:** `The preliminary model scores nearly every replayed alert 0.88 to 0.98, benign ones too, so it would plan suspends for benign processes | The model is local only and gitignored. Prefix-snapshot training and all 11 batches come before it feeds policy`.
+8. **Section 4.3 (accepted limits):** tiny benign trees (2 to 15 events) look like the tiny attack trees (T1053.005, T1547.001 have 12 to 14 events). The T1003.001 tree has 2 events because LSA protection blocked the dump, so it is expected to be missed.
+
+## PHASES.md
+9. **Step 3.4:** done in preliminary form: `triage/dataset.py`, `triage/train.py`. Open: batch 3 (waiting for Track A's decision on the duplicate sets), the other 8 batches, T1685 held-out, prefix-snapshot training (the gap between partial and complete trees is large), leave-one-batch-out tuning.
+10. **Step 3.5:** `score_process` is the model, with `None` when there is no valid model or no single observed tree. The pipeline passes it the feature-tree containing the alerting process.
+11. **Step 3.9:** the replay summary says whether a model is loaded.
+
+## ROADMAP.md
+12. **Section 2, `score_process`:** `None` is returned for: no model, a damaged model, a different feature list, events that are not one tree with an observed start, malformed events.
+
+## For Track A
+1. **Batch 3 has two overlapping sets** (sessions starting 17:29 to 17:38, and 19:09 to 19:47, both "run3" for the same techniques). Say which set to use. The 17:29 set has no benign session.
+2. Batch 3 needs `part` labels (a labels folder like `batch-02-labels-v2`) before it can be used.
+3. T1685 held-out sessions are not recorded yet.
+4. More benign sessions with short-lived processes would help: the 12 false positives in the first results are tiny benign trees.

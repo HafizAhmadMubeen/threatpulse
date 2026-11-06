@@ -124,7 +124,12 @@ def normalise_name(name: str) -> str:
     return "\\".join(parts)
 
 
-def load_session(folder: Path) -> tuple[dict, list[dict], dict[str, dict]]:
+def load_session(folder: Path, labels_dir: Path | None = None,
+                 from_start: bool = False) -> tuple[dict, list[dict], dict[str, dict]]:
+    """`labels_dir` is a folder with `<session folder name>/labels.csv`, used instead of the
+    labels.csv inside the session folder (labels are re-made without touching recordings).
+    `from_start` drops every event before session.json's start_utc: sensor start, settle
+    time and warm-up (agent/tools/record_session.ps1 says Track B computes from start_utc)."""
     try:
         session = json.loads((folder / "session.json").read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as error:
@@ -143,8 +148,19 @@ def load_session(folder: Path) -> tuple[dict, list[dict], dict[str, dict]]:
     if not events:
         raise SessionError(f"{folder}: no usable events")
 
+    if from_start:
+        start = session.get("start_utc")
+        if not isinstance(start, str):
+            raise SessionError(f"{folder}: session.json has no start_utc")
+        begin = parse_ts(start).timestamp()
+        events = [e for e in events if parse_ts(e["ts"]).timestamp() >= begin]
+        if not events:
+            raise SessionError(f"{folder}: no events at or after start_utc")
+
     labels: dict[str, dict] = {}
-    path = folder / "labels.csv"
+    path = (labels_dir / folder.name / "labels.csv") if labels_dir is not None else folder / "labels.csv"
+    if labels_dir is not None and not path.is_file():
+        raise SessionError(f"{folder}: no labels at {path}")
     if path.is_file():
         with path.open(encoding="utf-8", newline="") as stream:
             labels = {row["event_id"]: row for row in csv.DictReader(stream)}
@@ -357,17 +373,62 @@ def feature_row(stats: TreeStats) -> dict:
     }
 
 
-def extract_session(folder: Path) -> list[dict]:
+def tree_feature_row(events: list[dict]) -> dict | None:
+    """Features of ONE process tree from its own events: what score_process uses, so
+    training and scoring share the code. None when the events are not a single tree whose
+    root start was observed, because training only used such trees (step 3.4).
+
+    FIM events are not part of a tree's events, so n_fim_changes_linked is always 0 here.
+    The model leaves that column out (triage/model.py)."""
+    ordered = sorted(events, key=order_key)
+    trees = build_trees(ordered, assign_processes(ordered), {})
+    if len(trees) != 1:
+        return None
+    (stats,) = trees.values()
+    if not stats.root.start_observed:
+        return None
+    return feature_row(stats)
+
+
+def events_of_tree_containing(events: list[dict], pid: int) -> list[dict]:
+    """The events of the process tree (as defined above) that process `pid` belongs to.
+
+    The pipeline's own tree can reach up to a long-running process whose start was never
+    seen, and everything below it is one tree there. Here each started process under such
+    a parent is its own root, as in training. So this is the tree the model was trained on
+    the shape of. Empty when no event has this pid."""
+    ordered = sorted(events, key=order_key)
+    owner = assign_processes(ordered)
+    mine = [owner[e["event_id"]] for e in ordered if e["pid"] == pid and e["event_id"] in owner]
+    if not mine:
+        return []
+    root = mine[-1].root  # the latest process with this pid
+    return [e for e in ordered if e["event_id"] in owner and owner[e["event_id"]].root is root]
+
+
+def extract_session(folder: Path, labels_dir: Path | None = None, from_start: bool = False) -> list[dict]:
     """One row per process tree, in order of first activity."""
-    session, events, labels = load_session(folder)
+    return [row for row, _ in extract_session_trees(folder, labels_dir, from_start)]
+
+
+def extract_session_trees(folder: Path, labels_dir: Path | None = None,
+                          from_start: bool = False) -> list[tuple[dict, list[dict]]]:
+    """Each row with the events of its tree, for measuring how a score changes as a tree grows."""
+    session, events, labels = load_session(folder, labels_dir, from_start)
     owner = assign_processes(events)
     trees = build_trees(events, owner, labels)
     link_fim(events, trees)
+    by_root: dict[Proc, list[dict]] = {}
+    for event in events:
+        proc = owner.get(event["event_id"])
+        if proc is not None:
+            by_root.setdefault(proc.root, []).append(event)
     rows = []
     for number, stats in enumerate(sorted(trees.values(), key=lambda s: s.first)):
         technique = stats.technique or (session.get("technique") if stats.n_malicious else "") or ""
+        mine = by_root.get(stats.root, [])
         rows.append(
-            {
+            ({
                 "session_id": session["session_id"],
                 "tree_id": f"{session['session_id']}:{number}",
                 "root_pid": stats.root.pid,
@@ -382,7 +443,7 @@ def extract_session(folder: Path) -> list[dict]:
                 "n_events": stats.n_events,
                 "n_malicious_events": stats.n_malicious,
                 **feature_row(stats),
-            }
+            }, mine)
         )
     return rows
 
@@ -398,11 +459,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Extract behaviour features per process tree.")
     parser.add_argument("sessions", nargs="+", type=Path, help="session folders")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--labels-dir", type=Path,
+                        help="folder of <session>/labels.csv to use instead of each session's own labels.csv")
+    parser.add_argument("--from-start", action="store_true",
+                        help="leave out events before each session's start_utc (sensor start and warm-up)")
     args = parser.parse_args(argv)
     rows: list[dict] = []
     for folder in args.sessions:
         try:
-            rows += extract_session(folder)
+            rows += extract_session(folder, args.labels_dir, args.from_start)
         except SessionError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
