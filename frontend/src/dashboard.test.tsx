@@ -49,7 +49,7 @@ function fixtures(): Fixtures {
       actions_by_status: { executed: 8, failed: 0, skipped: 2, awaiting_approval: 1, approved: 0, rejected: 0 },
       pending_approvals: 1,
       fim_changes_pending: 2,
-      reports_total: 6,
+      reports_total: 8,
       events_filtered_before_llm: 25,
       skipped_records: { events: 0, alerts: 0, decisions: 0, reports: 0 },
     },
@@ -336,6 +336,13 @@ describe('alert detail', () => {
     expect(screen.getByText('skipped')).toBeTruthy()
     expect(container.textContent).toContain('P2b-persistence-origin')
     expect(container.textContent).toContain('T1547.001 Registry Run Keys / Startup Folder')
+  })
+
+  it('explains a report with no techniques', async () => {
+    const { container } = open('/alerts/a-20261105T093000-000001')
+    await screen.findByText('Evidence events')
+    expect(screen.getByText('No ATT&CK technique applies to this alert.')).toBeTruthy()
+    expect(container.textContent).toContain('EICAR antivirus test signature')
   })
 
   it('explains a missing report', async () => {

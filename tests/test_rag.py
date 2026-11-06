@@ -303,6 +303,12 @@ def test_a_static_score_never_makes_an_alert_high_risk():
     assert not is_high_risk(alert)
 
 
+def test_sample_reports_follow_the_high_risk_rule_exactly():
+    reports = vs.load_json(vs.SAMPLES_DIR / "reports.json")
+    reported = {report["alert_id"] for report in reports}
+    assert reported == {alert["alert_id"] for alert in ALERTS if is_high_risk(alert)}
+
+
 def test_a_low_risk_alert_never_reaches_the_prompt():
     with pytest.raises(prompt.NotHighRisk):
         build_messages(sample(2), EVENTS, [])
