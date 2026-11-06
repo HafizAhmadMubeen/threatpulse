@@ -94,13 +94,13 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 | Step | Owner | What to do | Check |
 |---|---|---|---|
 | 2.1 | A | Add network events, and read Sysmon Event IDs 3, 10, 12 and 13 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read`. Event IDs 12 and 13 give full registry paths where ETW can't name a key | A `process_access` event shows decoded rights such as `vm_read`. LSASS itself is an accepted limitation with LSA protection on (PLANNING.md 4.3). A Run key write shows as a `registry_set` event with `source: sysmon` and the full key |
-| 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce keys, startup folders and the hosts file, created before the `atomic-ready-2` snapshot. Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup. Changes emit `fim_change` events to `fim.jsonl` | Editing the hosts file produces a `fim_change` event |
-| 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`), pinned as in "Step 2.3 order of work" below. Take snapshot **`atomic-ready-2`**. Then run Atomic T1003.001 and record the LSASS result | `Invoke-AtomicTest T1547.001 -ShowDetails` works. The T1003.001 result is recorded in PLANNING.md 4.3 |
-| 2.4 | A | Recording script (`record_session.ps1`): start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script (`label_session.py`): events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo. `run_batch.ps1 -Batch N` runs one batch from `batch_plan.json`. Run 5 times per training test and 3 times per held-out test (PLANNING.md Section 10) | One labelled log file per test |
+| 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce/RunOnceEx keys (RunOnceEx as a subtree, watched through its parent until it exists), startup folders and the hosts file, created before the `atomic-ready-3` snapshot. Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup. Changes emit `fim_change` events to `fim.jsonl` | Editing the hosts file produces a `fim_change` event |
+| 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`), pinned as in "Step 2.3 order of work" below. Take snapshot **`atomic-ready-3`**. Then run Atomic T1003.001 and record the LSASS result | `Invoke-AtomicTest T1547.001 -ShowDetails` works. The T1003.001 result is recorded in PLANNING.md 4.3 |
+| 2.4 | A | Recording script (`record_session.ps1`): start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script (`label_session.py`): events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo. `run_batch.ps1 -Batch N` runs one batch from `batch_plan.json`. Run 5 times per training test and 3 times per held-out test, plus one extra T1547.001 #2 run (PLANNING.md Section 10). Each session waits 60 seconds after the sensors start. `label_session.py` also writes a `part` column (`test`, `harness` or `background`) | One labelled log file per test |
 | 2.5 | A | Record 15 benign sessions of about 10 minutes, including "noisy" normal activity: normal use, install/uninstall software, Windows Update, admin PowerShell, zipping files. Record about 5 of them with NAT on, so network mode doesn't correlate with the label (spurious correlation, Arp et al. 2022) | 15 benign sessions recorded, with network mode in each `session.json` |
-| 2.6 | A | After **each** batch: export procedure (stop everything → enable `vm-export` → copy only `.jsonl`/`.csv`, `session.json` and the summary `.txt` files → disable → roll back to `atomic-ready-2`) | Logs present on the host. VM back to snapshot |
-| 2.7 | B | Behaviour rules in Sigma-style YAML for each test technique, plus `match_rules` | Each rule fires on its sample event |
-| 2.8 | B | Feature extraction per process (counts, rates, zones touched, LSASS access, child processes, signed or not). **No names, paths or command text as features.** Develop on samples or public pre-recorded data until A's dataset arrives | Features computed on samples without errors |
+| 2.6 | A | After **each** batch: export procedure (stop everything → enable `vm-export` → copy only `.jsonl`/`.csv`, `session.json` and the summary `.txt` files → disable → roll back to `atomic-ready-3`) | Logs present on the host. VM back to snapshot |
+| 2.7 | B | Behaviour rules in Sigma-style YAML for each test technique, plus `match_rules`. The T1547.001 rule must cover `Run`, `RunOnce` and `RunOnceEx` | Each rule fires on its sample event |
+| 2.8 | B | Feature extraction per process (counts, rates, zones touched, LSASS access, child processes, signed or not). **No names, paths or command text as features.** Compute all features, including tree shape, from the `test` part of `labels.csv` only, and leave the `harness` part out of training and evaluation (PLANNING.md Section 10, "Label parts"). Develop on samples or public pre-recorded data until A's dataset arrives | Features computed on samples without errors |
 | 2.9 | B | Train the static model on EMBER's ready-made feature vectors (data stored on the large drive, not in the repo) | Accuracy reported on EMBER's test set |
 | 2.10 | C | Download ATT&CK STIX data (`enterprise-attack.json`), split into one document per technique, embed into ChromaDB | Number of techniques loaded matches the file |
 | 2.11 | C | Retrieval tests with plain-language queries | "process reads LSASS memory" → T1003.001 in top results |
@@ -111,7 +111,7 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 Everything here happens inside the VM, and a person runs every Atomic test. Use 64-bit PowerShell, opened as administrator.
 
 1. Finish the open checks in `agent/README.md`, with NAT on.
-2. Add the Defender exclusion before downloading anything, otherwise Defender may quarantine files during the install. It belongs to `atomic-ready-2` only, not `clean-baseline`:
+2. Add the Defender exclusion before downloading anything, otherwise Defender may quarantine files during the install. It belongs to `atomic-ready-3` only, not `clean-baseline`:
    ```powershell
    Add-MpPreference -ExclusionPath 'C:\AtomicRedTeam'
    ```
@@ -128,9 +128,9 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 4. Check the install: `Invoke-AtomicTest T1547.001 -ShowDetails` must work.
 5. With NAT still on, run `Invoke-AtomicTest <technique> -TestNumbers <numbers> -GetPrereqs` for each test in PLANNING.md 8.1.
 6. Confirm the FIM baseline: run `main.py watch` briefly and expect `Changes reported: 0`. If Windows changed something legitimate, deliberately replace the baseline now.
-7. Shut down, set the network to host-only, and take snapshot **`atomic-ready-2`**. It now holds the baseline, the tools and the installers in `C:\ThreatPulseLab\installers`.
+7. Shut down, set the network to host-only, and take snapshot **`atomic-ready-3`**. It now holds the baseline, the tools, the installers in `C:\ThreatPulseLab\installers`, and the current FIM and recording scripts. Take it again after any change to those, and `agent_commit` in each `session.json` says which version recorded the session.
 8. Record the LSASS result from the snapshot, with the agent running: T1003.001 test #2 (`-ShowDetails`, then the test, then `-Cleanup`). Never turn off Defender or LSA protection to change the result. With LSA protection on, this result is the accepted limitation in PLANNING.md 4.3.
-9. Export only the `.jsonl` logs and roll back to `atomic-ready-2`. Never copy a dump out of the VM.
+9. Export only the `.jsonl` logs and roll back to `atomic-ready-3`. Never copy a dump out of the VM.
 
 **Network:** NAT for steps 1 to 6. Recordings are host-only, except T1105, which needs NAT.
 
@@ -201,5 +201,5 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 | Snapshot | Taken at | Used for |
 |---|---|---|
 | `clean-baseline` | Step 0.5 | Fresh start |
-| `atomic-ready-2` | Step 2.3 | Each recording batch |
+| `atomic-ready-3` | Step 2.3 | Each recording batch |
 | `integration-ready` | Step 4.1 | Demos and final evaluation |

@@ -8,6 +8,9 @@ is recorded in the file, and a test checks that this script still produces it.
 
 Batches mix benign and attack sessions in random order, so that a batch doesn't correlate
 with the label. Activities that change the system run last in their batch.
+
+A test's extra runs (extra_runs in recording_tests.json) are appended at the end of
+EXTRA_BATCH after the random order is fixed, so adding one never moves another session.
 """
 
 import json
@@ -32,6 +35,7 @@ NAT_BATCHES = (
 )
 T1105 = "T1105-29"
 T1685 = "T1685-51"
+EXTRA_BATCH = 5  # the last host-only batch with training tests
 
 
 def deal_host_benign(rng: random.Random) -> list[list[str]]:
@@ -87,6 +91,14 @@ def build_plan(tests: list[dict]) -> dict:
             runs[test_id] = runs.get(test_id, 0) + 1
             ordered.append({"order": order, "run": runs[test_id], **session})
         batches.append({"batch": number, "network": network, "sessions": ordered})
+
+    extra_sessions = batches[EXTRA_BATCH - 1]["sessions"]
+    for test in tests:
+        for _ in range(test.get("extra_runs", 0)):
+            runs[test["id"]] += 1
+            extra_sessions.append(
+                {"order": len(extra_sessions) + 1, "run": runs[test["id"]], "test_id": test["id"], "extra": True}
+            )
 
     return {"seed": SEED, "batches": batches}
 

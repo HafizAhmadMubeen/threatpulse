@@ -4,7 +4,7 @@
 #   run_batch.ps1 -Batch 1 [-FromOrder 4]
 #
 # It pauses before each manual benign session and says what to do. If a session fails, it
-# stops. Export what finished, revert to atomic-ready-2, then resume with -FromOrder.
+# stops. Export what finished, revert to atomic-ready-3, then resume with -FromOrder.
 
 param(
     [Parameter(Mandatory)][int]$Batch,
@@ -60,4 +60,4 @@ foreach ($session in $entry.sessions) {
     & (Join-Path $PSScriptRoot 'record_session.ps1') @arguments
 }
 
-"`nBatch $Batch finished. Export it, disable the shared folder, then revert to atomic-ready-2."
+"`nBatch $Batch finished. Export it, disable the shared folder, then revert to atomic-ready-3."

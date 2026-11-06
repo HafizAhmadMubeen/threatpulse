@@ -243,6 +243,12 @@
           "order": 7,
           "run": 5,
           "test_id": "T1547.001-1"
+        },
+        {
+          "order": 8,
+          "run": 6,
+          "test_id": "T1547.001-2",
+          "extra": true
         }
       ]
     },

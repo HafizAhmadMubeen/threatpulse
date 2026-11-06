@@ -54,7 +54,7 @@ def watch(folder: Path, out: Path, poll_only: bool) -> int:
     from baseline import load_baseline
     from events import EventWriter
     from monitor import FULL_COMPARE_SECONDS, Monitor, run
-    from targets import REGISTRY_TARGETS, folder_targets
+    from targets import APPEARANCE_WATCHES, REGISTRY_TARGETS, folder_targets
     from windows_watch import ERROR_ALREADY_EXISTS, WAIT_OBJECT_0, WindowsSource
 
     try:
@@ -77,7 +77,13 @@ def watch(folder: Path, out: Path, poll_only: bool) -> int:
 
     writer = EventWriter(out)
     monitor = Monitor(baseline, writer.write)
-    source = WindowsSource(REGISTRY_TARGETS, folder_targets(os.environ), stop_event, poll_only)
+    source = WindowsSource(
+        REGISTRY_TARGETS,
+        folder_targets(os.environ),
+        stop_event,
+        poll_only,
+        appearance=APPEARANCE_WATCHES,
+    )
 
     mode = f"every {FULL_COMPARE_SECONDS} seconds only" if poll_only else "on notifications"
     print(f"ThreatPulse FIM running, comparing {mode}. Writing to {out}\nPress Ctrl+C to stop.")

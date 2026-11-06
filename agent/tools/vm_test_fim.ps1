@@ -2,9 +2,12 @@
 # opened with "Run as administrator", while FIM is watching. check_fim_run.py then checks
 # the recorded events.
 #
-# It adds a comment line to the hosts file, adds a test value to the Run and RunOnce keys
-# and adds a dummy text file to the startup folder. All of it is undone before it ends,
-# even if the script fails part-way.
+# It adds a comment line to the hosts file, adds a test value to the Run, RunOnce and
+# RunOnceEx keys and adds a dummy text file to the startup folder. All of it is undone
+# before it ends, even if the script fails part-way.
+#
+# RunOnceEx keeps its values in numbered subkeys and may not exist yet, which is what FIM
+# has to cope with. The test creates the keys that are missing, and removes only those.
 #
 # -Quick changes only the HKCU Run key, to test the 60-second compare with --poll-only.
 # Use -Quick -HoldSeconds 70, so that FIM has time to see the value appear and go.
@@ -46,6 +49,17 @@ foreach ($key in $(if ($Quick) { $allKeys[0] } else { $allKeys })) {
         Write-Warning "Skipping $key, which does not exist."
     }
 }
+
+# The RunOnceEx keys may be missing. Note which of them the test has to create.
+$createdKeys = @()
+if (-not $Quick) {
+    foreach ($treeRoot in @("HKLM\SOFTWARE\$root\RunOnceEx", "HKLM\SOFTWARE\WOW6432Node\$root\RunOnceEx")) {
+        $keys += "$treeRoot\0001\Depend"
+        foreach ($path in @($treeRoot, "$treeRoot\0001", "$treeRoot\0001\Depend")) {
+            if (-not (Test-Path "Registry::$path")) { $createdKeys += $path }
+        }
+    }
+}
 Set-Content 'C:\ThreatPulseLab\logs\fim_test_keys.txt' $keys
 
 $hostsFile = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
@@ -73,6 +87,10 @@ try {
     $ErrorActionPreference = 'Continue'
     foreach ($key in $keys) {
         & reg delete $key /v $valueName /f 2>$null | Out-Null
+    }
+    # Only keys the test created, each of which holds nothing but the test's own value.
+    foreach ($path in $createdKeys) {
+        Remove-Item "Registry::$path" -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (-not $Quick) {
         [System.IO.File]::WriteAllBytes($hostsFile, $hostsBefore)

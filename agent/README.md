@@ -187,20 +187,38 @@ These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A p
 | `tools/vm_t1486_script.ps1` | Our harmless T1486 test, on dummy files only |
 | `tools/vm_benign_admin.ps1`, `tools/vm_benign_zip.ps1` | Scripted benign activities |
 | `tools/make_batch_plan.py` | Generated `batch_plan.json`, from a recorded seed |
-| `tools/label_session.py` | Writes `labels.csv` for one session |
+| `tools/label_session.py` | Writes `labels.csv`, with a `part` column, for one session or a whole batch |
 | `config/recording_tests.json` | The only tests that may be recorded, with their runs and network mode |
 
 Each session gets its own folder under `C:\ThreatPulseLab\logs\sessions\`, holding `events.jsonl`, `fim.jsonl`, `session.json` and both sensors' summaries.
 
 `record_session.ps1` refuses a test that isn't on the list, an Atomic install that isn't the pinned commit, and a `-Network` value that doesn't match what the VM can reach. Cleanup runs as a separate process after the end time, so it's never labelled as the attack.
 
-Each session also has to pass a clean-start check: if FIM reports a change from the baseline before the session begins, the recording stops. This only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
+After the sensors start, each session waits 10 seconds to settle and then 60 seconds to warm up (`-WarmupSeconds`), and records `warmup_seconds` in `session.json`. It then has to pass a clean-start check: if FIM reports a change from the baseline by then, the recording stops. If a harmless rewrite such as Edge's Run value trips it, run the batch again from that session with `-FromOrder`. The check only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
 
 `pool` in `session.json` says which group of techniques a session belongs to. It isn't the train/test split, which is made later by session.
 
-PowerShell 5.1 writes `session.json` with a UTF-8 byte order mark, so read it with `encoding="utf-8-sig"`. Plain `utf-8` fails on the first character.
+From batch 2, `session.json` has no byte order mark. Batch 1's files have one and no `warmup_seconds`, so read them with `encoding="utf-8-sig"`, which works for both, and treat a missing `warmup_seconds` as 0.
 
-**Installers for the `install-uninstall` sessions.** They sit in `C:\ThreatPulseLab\installers` inside the `atomic-ready-2` snapshot, downloaded with NAT on from the publishers' own sites. The hashes are what the VM computed with `Get-FileHash`. They haven't been compared with a publisher's checksum.
+**Labels and parts.** `label_session.py` writes one row per event: `event_id`, `label`, `part`, `technique`, `pool`, `session_id`, `network` and `warmup_seconds`.
+
+| `part` | Which events |
+|---|---|
+| `test` | The test's own processes. For an Atomic test, the process the `Invoke-AtomicTest` wrapper starts to run it, and everything below it. For our T1486 script, the whole tree |
+| `harness` | The wrapper itself: the root PowerShell and the `hostname`, `whoami` and `conhost` it starts |
+| `background` | Everything else, including every event in a benign session |
+
+`label` is still the tree label, so the wrapper's events are `malicious` there. **Track B must compute all features, including tree shape, from the `test` part only, and leave the `harness` part out of training and evaluation.** Every Atomic session runs the wrapper and no benign session does, so a model that sees it learns the wrapper instead of behaviour, and held-out results would look better than they are.
+
+To label exported data without touching it:
+
+```bash
+cd agent && uv run python tools/label_session.py --batch <exported batch folder> --out <new folder>
+```
+
+`--out` never overwrites a `labels.csv`, and `--batch` needs it. The test part of T1003.001 is only about 2 events. The split depends on the processes the wrapper starts, so check it again if Atomic Red Team or the wrapper is updated.
+
+**Installers for the `install-uninstall` sessions.** They sit in `C:\ThreatPulseLab\installers` inside the `atomic-ready-3` snapshot, downloaded with NAT on from the publishers' own sites. The hashes are what the VM computed with `Get-FileHash`. They haven't been compared with a publisher's checksum.
 
 | File | SHA-256 |
 |---|---|
@@ -459,7 +477,7 @@ Windows blocked the dump, but the agent recorded no sign of the attempt in `proc
 | `filters.json` hash and agent commit | The same in all 9 (`198be4a`) |
 | Clean-start check | Passed for all 9 |
 
-Findings from batch 1, all open (PLANNING.md Section 9 has the risks):
+Findings from batch 1. Each was decided afterwards, and PLANNING.md Section 10 records how: the wrapper gets its own `part`, FIM now watches `RunOnceEx`, a 60-second warm-up was added, the restore waits about 2 seconds, and the jump-list writes are accepted.
 
 - **The Atomic harness dominates the malicious label.** In the six Atomic sessions, 64% to 98% of the malicious events come from the `Invoke-AtomicTest` PowerShell wrapper (module import, `hostname`, `whoami`, `conhost`), not from the test's own processes, which add between 2 and 67 events. Sessions 4, 5 and 6 have the same 131 malicious events.
 - **FIM doesn't watch `RunOnceEx`.** Atomic T1547.001 #2 is named "Reg Key RunOnce" but writes `HKLM\...\RunOnceEx\0001\Depend`. ETW and Sysmon recorded the add and the delete, and FIM reported nothing, because it watches only `Run` and `RunOnce`.

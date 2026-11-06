@@ -2,7 +2,7 @@
   "atomic_commit": "edb5039ae07216bf322fdba07b6f686d7c088a03",
   "tests": [
     { "id": "T1547.001-1", "technique": "T1547.001", "kind": "atomic", "number": 1, "pool": "training-technique", "runs": 5, "network": "host-only" },
-    { "id": "T1547.001-2", "technique": "T1547.001", "kind": "atomic", "number": 2, "pool": "training-technique", "runs": 5, "network": "host-only" },
+    { "id": "T1547.001-2", "technique": "T1547.001", "kind": "atomic", "number": 2, "pool": "training-technique", "runs": 5, "extra_runs": 1, "network": "host-only" },
     { "id": "T1003.001-2", "technique": "T1003.001", "kind": "atomic", "number": 2, "pool": "training-technique", "runs": 5, "network": "host-only" },
     { "id": "T1059.001-17", "technique": "T1059.001", "kind": "atomic", "number": 17, "pool": "training-technique", "runs": 5, "network": "host-only" },
     { "id": "T1105-29", "technique": "T1105", "kind": "atomic", "number": 29, "pool": "training-technique", "runs": 5, "network": "nat" },

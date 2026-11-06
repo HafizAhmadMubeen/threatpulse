@@ -15,10 +15,10 @@ ROOT = 1000
 counter = 0
 
 
-def event(ts_second, event_type, pid, ppid=500, source="etw"):
+def event(ts_second, event_type, pid, ppid=500, source="etw", image=None):
     global counter
     counter += 1
-    return {
+    item = {
         "event_id": f"e-20261106T101500-{counter:06d}",
         "ts": f"2026-11-06T10:00:{ts_second:02d}.000Z",
         "source": source,
@@ -26,6 +26,9 @@ def event(ts_second, event_type, pid, ppid=500, source="etw"):
         "pid": pid,
         "ppid": ppid,
     }
+    if image:
+        item["process"] = {"image": image}
+    return item
 
 
 def attack_session(**changes):
@@ -177,6 +180,7 @@ def test_recording_plan_matches_the_decided_numbers():
     tests = config()["tests"]
     assert sum(test["runs"] for test in tests if test["pool"] == "training-technique") == 30
     assert sum(test["runs"] for test in tests if test["pool"] == "held-out") == 9
+    assert {test["id"]: test["extra_runs"] for test in tests if "extra_runs" in test} == {"T1547.001-2": 1}
     assert (config()["benign"]["sessions"], config()["benign"]["nat_sessions"]) == (15, 5)
 
 
@@ -212,10 +216,10 @@ def test_committed_plan_matches_its_seed():
 
 def test_plan_covers_every_session_once():
     sessions = plan_sessions()
-    assert len(sessions) == 54
+    assert len(sessions) == 55
     for test in config()["tests"]:
         runs = [session["run"] for session in sessions if session["test_id"] == test["id"]]
-        assert sorted(runs) == list(range(1, test["runs"] + 1))
+        assert sorted(runs) == list(range(1, test["runs"] + test.get("extra_runs", 0) + 1))
     benign = sorted(session["run"] for session in sessions if session["test_id"] == "benign")
     assert benign == list(range(1, 16))
 
@@ -246,7 +250,10 @@ def test_plan_network_modes_match_the_tests():
 def test_plan_runs_each_host_only_test_once_per_batch():
     for batch in load_plan()["batches"]:
         if batch["network"] == "host-only":
-            attacks = [session["test_id"] for session in batch["sessions"] if session["test_id"] != "benign"]
+            attacks = [
+                session["test_id"] for session in batch["sessions"]
+                if session["test_id"] != "benign" and not session.get("extra")
+            ]
             assert len(attacks) == len(set(attacks))
 
 

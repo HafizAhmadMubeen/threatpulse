@@ -6,7 +6,11 @@
 #
 # run_batch.ps1 calls this for each session of a batch. It only runs what
 # agent/config/recording_tests.json lists, so the T1685 tests that remove Sysmon can't run
-# through it. Roll back to atomic-ready-2 after each batch (step 2.6).
+# through it. Roll back to atomic-ready-3 after each batch (step 2.6).
+#
+# After the sensors start, the script waits for the settle time and then the warm-up, so
+# that the start of the sensors is over before the session begins. -WarmupSeconds is
+# recorded in session.json. Sessions recorded before the warm-up existed count as 0.
 
 param(
     [Parameter(Mandatory)][string]$TestId,
@@ -15,7 +19,8 @@ param(
     [string]$Activity,
     [int]$Minutes = 0,
     [int]$Batch = 0,  # 0 means a trial, outside the batch plan
-    [int]$Order = 0
+    [int]$Order = 0,
+    [int]$WarmupSeconds = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,9 +109,14 @@ $endUtc = $null
 & (Join-Path $PSScriptRoot 'start_lab_sensors.ps1') -Start -SessionDir $sessionDir
 try {
     Start-Sleep -Seconds $SettleSeconds
+    if ($WarmupSeconds -gt 0) {
+        "Warming up for $WarmupSeconds seconds."
+        Start-Sleep -Seconds $WarmupSeconds
+    }
 
     # FIM compares with the baseline when it starts, so anything in its log by now means
     # the persistence zone isn't clean. This can't see Defender's state or scheduled tasks.
+    # If a harmless rewrite such as Edge's Run value trips it, run the batch again from here.
     if ((Get-Item (Join-Path $sessionDir 'fim.jsonl')).Length -gt 0) {
         throw "Clean-start check failed: FIM reported changes before the session began. See $sessionDir\fim.jsonl"
     }
@@ -152,6 +162,7 @@ $session = [ordered]@{
     pool          = if ($benign) { 'unassigned' } else { $test.pool }  # the train/test split comes later
     batch         = $Batch
     order         = $Order
+    warmup_seconds = $WarmupSeconds
     technique     = if ($benign) { $null } else { $test.technique }
     test_number   = if ($benign -or $test.kind -ne 'atomic') { $null } else { $test.number }
     activity      = if ($benign) { $Activity } else { $null }
@@ -165,6 +176,10 @@ $session = [ordered]@{
     agent_commit  = (& git -C $repo rev-parse HEAD).Trim()
     filters_sha256 = (Get-FileHash (Join-Path $repo 'agent\config\filters.json') -Algorithm SHA256).Hash.ToLower()
 }
-$session | ConvertTo-Json | Set-Content (Join-Path $sessionDir 'session.json') -Encoding UTF8
+# Windows PowerShell 5.1 adds a byte order mark with -Encoding UTF8, so write the bytes directly.
+[System.IO.File]::WriteAllText(
+    (Join-Path $sessionDir 'session.json'),
+    ($session | ConvertTo-Json),
+    (New-Object System.Text.UTF8Encoding($false)))
 
 "Session finished: $sessionDir"
