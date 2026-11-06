@@ -1,0 +1,5 @@
+# Downloaded ATT&CK data, the model and the vector index. Recreate with:
+#   uv run python -m backend.rag.fetch
+#   uv run python -m backend.rag.index
+*
+!.gitignore
