@@ -12,8 +12,21 @@ returned when:
 The score is the model's raw output. Class weights make it uncalibrated: it ranks trees,
 and is not a probability. See triage/README.md for what it was trained and tested on.
 
-Known gap: the pipeline passes the tree as it is when an alert fires, and in a replay that
-tree includes the wrapper that runs each test, which training left out.
+SCOPE: the scorer is label-free. At runtime it sees only this:
+- the events of ONE process tree, as the pipeline passes them: the alerting process, its
+  descendants, and its ancestors up to (not including) the first one whose start was never
+  seen. Only events up to the moment of the alert. The agent's events only, no FIM events;
+- from them, counts, rates, zones touched and signing (triage/features.py). A path or key
+  is read only to answer "which zone is this", and that answer leaves as a number.
+It never sees, reads or opens: labels, labels.csv, session.json, start_utc, the harness
+that runs a test (it cannot know which process that is), a process name, a path, a command
+line, a file, the network, or the model's own past scores. A test blocks every file read
+while scoring, and another checks that labels cannot change a score.
+
+What that means: training used labels to choose positives and negatives, to leave the
+harness out and to drop events before start_utc. None of that exists at runtime, so a
+replayed recording is scored with the wrapper still inside the tree and with the sensor's
+start-up events. triage/README.md says how far that moves the scores.
 """
 
 import logging

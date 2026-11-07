@@ -3,6 +3,7 @@
 All data here is synthetic (tests/test_features.py builds the recordings).
 """
 
+import ast
 import csv
 import json
 from pathlib import Path
@@ -454,3 +455,93 @@ def test_the_saved_model_is_the_snapshot_model(export, tmp_path):
     complete = report["folds"][0]["models"]["complete"]["train"]["n_positive"]
     assert report["folds"][0]["models"]["snapshots"]["train"]["n_positive"] >= complete
     assert len(report["final_model"]["sha256"]) == 64
+
+
+# ---- the scorer is label-free -------------------------------------------------------------
+
+
+def test_scoring_opens_no_file_at_all(with_model, monkeypatch):
+    """No labels, session.json, model file or anything else may be read while scoring: the
+    model is loaded before, and the scorer works on the events it is given."""
+    events = tree_events(attack_recording(), 200)
+    expected = score.score_process(events)  # also loads the model, once
+    assert expected is not None
+    import builtins
+    import io
+    import os
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"scoring tried to open a file: {args[:1]}")
+
+    monkeypatch.setattr(builtins, "open", refuse)
+    monkeypatch.setattr(io, "open", refuse)
+    monkeypatch.setattr(os, "open", refuse)
+    monkeypatch.setattr(Path, "read_text", refuse)
+    monkeypatch.setattr(Path, "read_bytes", refuse)
+    monkeypatch.setattr(Path, "open", refuse)
+    assert score.score_process(events) == expected
+
+
+def test_labels_and_harness_markers_cannot_change_a_score(with_model):
+    plain = tree_events(attack_recording(), 200)
+    marked = [{**e, "label": "benign", "part": "harness", "technique": "", "malicious": False} for e in plain]
+    assert score.score_process(marked) == score.score_process(plain)
+
+
+def test_names_paths_and_command_lines_cannot_change_a_score(with_model):
+    """The ML rule, at the scorer: rename everything a feature must ignore."""
+    from tests.test_features import attack_recording as renamed_recording
+    a = tree_events(attack_recording(), 200)
+    b = tree_events(renamed_recording({"image": "C:\\Other\\zzz.exe", "cmd": "zzz --secret", "leaf": "other",
+                                       "ext": ".enc", "ip": "198.51.100.7", "value": "Other"}), 200)
+    assert score.score_process(a) is not None
+    # The recordings differ in paths, names and command lines but not in what they do.
+    assert score.score_process(a) == score.score_process(b)
+
+
+def code_words(path: Path) -> set[str]:
+    """Names, attributes, imports and string values in the code. Docstrings and comments are not code."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                docstrings.add(id(body[0].value))
+    words = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            words.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            words.add(node.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            words.update(alias.name for alias in node.names)
+            words.add(getattr(node, "module", None) or "")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            words.add(node.value)
+    return words
+
+
+def test_the_scorer_and_the_run_path_never_name_labels():
+    """The scoring path has no label input. score.py reads no label file or session data at all.
+    The pipeline reads session.json only to describe the session in the summary, and never labels."""
+    scorer = code_words(ROOT / "triage/score.py")
+    for word in ("labels.csv", "read_labels", "load_session", "session.json", "start_utc",
+                 "harness_excluded", "labels_dir", "csv", "open", "read_text"):
+        assert word not in scorer, f"triage/score.py uses {word}"
+    pipeline = code_words(ROOT / "backend/pipeline/run.py")
+    for word in ("labels.csv", "read_labels", "labels_dir", "harness_excluded", "start_utc", "part"):
+        assert word not in pipeline, f"backend/pipeline/run.py uses {word}"
+    import inspect
+    assert list(inspect.signature(score.score_process).parameters) == ["events"]
+    # What reaches the scorer is events: the pipeline's score() hands it nothing else.
+    assert "events_of_tree_containing(proc.tree_events(), proc.pid)" in inspect.getsource(run_session.__globals__["Replay"].score)
+
+
+def test_the_harness_is_not_removed_at_runtime_and_the_scorer_says_so(with_model):
+    """A wrapper whose start was seen is part of the tree the scorer sees. Training left the
+    harness out, using labels, and at runtime there are none. This is the known difference."""
+    recording = attack_recording()
+    seen = features.events_of_tree_containing(recording.events, 202)
+    assert {e["pid"] for e in seen} == {200, 201, 202}  # the test's launcher (pid 200) is inside
+    assert "SCOPE" in score.__doc__ and "label-free" in score.__doc__

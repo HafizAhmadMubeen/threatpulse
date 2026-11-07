@@ -153,3 +153,25 @@ How to read it:
 - **The snapshot model is not clearly better on false positives.** Complete trees: FP 12 down to 7 in one fold, at the price of one missed attack (recall 5 of 5 to 4 of 5); unchanged in the other.
 - **One benign alert still scores 0.8 or more at alert time in the first fold**, with both models, and the snapshot model's worst alert-time difference got larger (0.95). Alert-time scoring still must not drive policy: `--use-model` stays off by default.
 - Every group here has between 1 and 9 attack trees, so these are differences of a few trees, not rates. The intervals in `report.json` say so.
+
+### Scoring scope: label-free (step 3.5)
+
+`score_process(events)` takes **events and nothing else**. At runtime it sees:
+- the events of **one process tree**: the alerting process, its descendants, and its ancestors up to the first one whose start was never seen (`events_of_tree_containing`, the tree definition training used). Only events up to the moment of the alert, from the agent only, with no FIM events;
+- from them, counts, rates, zones touched and signing. A path or key is read only to answer "which zone is this", and the answer leaves as a number.
+
+It does **not** see, read or open: labels, `labels.csv`, `session.json`, `start_utc`, the harness (it can't know which process that is), a process name, a path, a command line, any file, the network, or earlier scores.
+
+How training differs from runtime, and what that costs:
+
+| | Training | Runtime |
+|---|---|---|
+| Positives and negatives | from labels | none: the score ranks, nothing is "known" |
+| Harness (the wrapper that runs a test) | left out, using the `part` label | **inside the tree** if its start was seen |
+| Events before `start_utc` (sensor start, warm-up) | dropped | present |
+| Tree size | snapshots of complete trees | the tree as it is at the alert |
+| FIM events | used to build the tree's FIM count, but the model leaves that column out | not in the tree |
+
+The harness and the start-up events exist only in lab recordings. A real endpoint has no harness, but a replay of our recordings does, so replayed alert-time scores describe a harder case than training saw. The pipeline-replay rows in the skew table above are measured this way, label-free.
+
+Enforced by tests: scoring opens no file at all (every file read is blocked while it runs), extra label fields on events change nothing, renaming every process, path, command line and address changes nothing, the scorer and the pipeline's run module never name label files, and `score_process`'s only parameter is `events`.

@@ -319,3 +319,8 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 1. **PLANNING.md Section 10, Decided:** `| Training rows | Snapshots of each tree after 10, 25, 50, 75 and 100% of its time span. A partial snapshot needs 2 events. The whole tree is always kept. A snapshot keeps its tree's label |`.
 2. **PLANNING.md Section 8.3:** report the skew between alert-time and complete-tree scores, next to precision, recall and false-positive rate. First numbers are in `triage/README.md` (preliminary).
 3. **PHASES.md Step 3.4:** done with prefix snapshots. The skew for attacks fell where it was large, and false positives are not clearly better.
+
+## Added on `track-b/training` (label-free scoring)
+1. **PLANNING.md Section 5.6 / 4.1:** the scorer is label-free. It takes a process tree's events and nothing else. It never reads labels, `session.json`, the harness, names, paths or command lines. See `triage/README.md` "Scoring scope".
+2. **PLANNING.md Section 4.3 (accepted limits):** a replayed lab recording is scored with the harness inside the tree and with sensor start-up events, which training left out. That is a harder case than a real endpoint, and it makes replayed alert-time scores pessimistic.
+3. **ROADMAP.md Section 2, `score_process`:** the signature is `score_process(events)`, and the events are the tree containing the alerting process, cut at the first ancestor whose start was not seen.
