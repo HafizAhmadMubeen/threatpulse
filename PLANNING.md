@@ -172,6 +172,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 - **The command-line rule is the layer that still fires.** `R-T1003-002` matches a dump command line (the `comsvcs.dll` MiniDump export, a dump tool pointed at lsass, or `sekurlsa::`) and fires even when Windows denies the read. Replayed over the 5 recorded sessions it fires in 4. In the other (batch 2) the command line was not captured (null), and the rule cannot fire without it. It is a string match, so a variant that avoids those strings, such as calling the export by ordinal, is not caught.
 - **No automatic containment for this technique under LSA protection.** Policy rule P1 matches only `process_access` events, so an `R-T1003-002` alert gets the default decision, `alert_only`, whatever its risk score.
 - **Evaluation.** T1003.001 is reported as a documented limitation, not as a model success or failure (Section 8.1).
+- **Free-tier LLM terms.** On the free tier the provider may use prompts to improve its products. So only triaged alerts from the lab VM are ever sent to the LLM, never raw event streams or personal data (CLAUDE.md design rule 4), and the telemetry in them comes from the lab VM's simulated activity. Running Ollama locally keeps the prompts on the lab workstation.
 - Persistence protection is **detect-and-revert**, not block. The process that wrote the key has often already exited, so there may be nothing left to suspend.
 - Our own ransomware detector suspends after a burst of encryptions, so a few files may be lost first. We measure this ("files lost before containment") as a metric, as ShieldFS-style evaluations do.
 
@@ -561,7 +562,7 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | EMBER feature extraction is hard to install (depends on a specific LIEF version) | Pin versions in a separate venv. If still blocked, use our own `pefile` features for the static layer |
 | Low RAM | VM at 6 GB, `wsl --shutdown` during VM tests, close other apps |
 | Low disk space on C: | VM, ISO and datasets on another drive. WSL holds only the code |
-| Free-tier LLM limits or outage | Switch provider with one setting. Fall back to a local model (Ollama on the lab workstation's GPU) |
+| Free-tier LLM limits or outage | Switch provider with `LLM_PROVIDER` (Gemini, or Groq as an alternative). Fall back to a local model (Ollama on the lab workstation's GPU) |
 | VM evaluation licence expires (90 days) | Rebuild from the ISO. Keep setup steps scripted in `docs/lab-setup.md` |
 | A member falls behind | See "Rebalancing" in ROADMAP.md. Simplify a layer, never remove it |
 | The backend API has no authentication, so any process in the VM could approve its own change | Future work in the current release (Section 2.1): the approve and reject demo runs on replayed recorded sessions. Must be solved before the dashboard approves actions on a live system |
@@ -612,13 +613,12 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | Lab environment | One lab VM on Track A's workstation. Tracks B and C develop in WSL only |
 | Scope | The design covers the C++ ETW agent, all four generations, all layers and all four zones. **The current release is the subset in Section 2.1:** all four generations with generation 2 resting on `pefile` heuristics and FIM, the dataset of batches 1 to 6 and batch 9, the verification, reports, dashboard demo and evaluation listed there. Future work: the EMBER static model, a full live end-to-end integration, backend API authentication, further batches and an LSASS demonstration |
 | Release scope | See Section 2.1 for the full list. Dataset: batches 1 to 6 and one T1685 batch (batch 9), 47 sessions, batch 6 the NAT batch. Verification in the VM: EICAR and UPX, entropy, enforcement test, zone demos for ransomware and persistence. Reports: the technique-ID validator and the prompt-injection demo. Dashboard: a demo from replayed sessions with approve and reject, plus screen-recorded live zone demos. Evaluation: leave-one-batch-out, per-technique table, false-positive rate, rule-layer results, latency, limitations with counts |
-| LLM provider | **Free-tier cloud API** (e.g. Groq or Google Gemini). Provider-agnostic client, so switching is one setting. **Local model (Ollama) as fallback** if free tiers are insufficient. Only simulated lab data is ever sent. API keys live in `.env`, never in the repo |
+| LLM provider | **Gemini free tier.** **Local Ollama is the fallback**, if the free tier is insufficient or unavailable, and **Groq is an alternative**. The client is provider-agnostic, so the provider is one setting. Environment variables: `LLM_PROVIDER` (which provider to use), `GEMINI_API_KEY` and `GROQ_API_KEY`. They live in a gitignored `.env`, with `.env.example` as the template of empty values, and never in code, logs or commits. Only triaged alerts from the lab VM are ever sent, never raw event streams or personal data. On the free tier the provider may use prompts to improve its products (Section 4.3) |
 
 ### Open
 
 | Decision | Options | Recommendation |
 |---|---|---|
-| Free-tier provider | Groq / Google Gemini / other | Test both with a sample report, pick on quality and rate limits |
 | Vector DB | ChromaDB / FAISS | ChromaDB (simpler, stores documents with metadata) |
 | Track B and C owners | Haider Shahid / Ahmed Muaz | Assigned within the team |
 
