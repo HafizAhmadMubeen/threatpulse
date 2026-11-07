@@ -4,6 +4,19 @@ How the work is split so **each track can be built independently**. The phases a
 
 ---
 
+## Release scope
+
+The tasks below are the full plan. The current release is the subset in [PLANNING.md Section 2.1](PLANNING.md#21-release-scope), and [PHASES.md](PHASES.md#release-scope) marks it step by step. Here a task marked **Future work** is designed but not part of the release, and one marked **Release:** is in the release in the form the marker states. Ownership does not change.
+
+| Track | In the release | Future work |
+|---|---|---|
+| **A** | Agent, FIM, policy engine, the enforcement test of every action and its undo in the VM, the dataset (batches 1 to 6 and one T1685 batch, 47 sessions, batch 6 the NAT batch), live zone demos for documents and persistence | The LSASS allowlist and enforcing mode, a live run of the agent feeding the pipeline, a demonstration of the LSASS zone, further batches (7, 8, 10 and 11) |
+| **B** | Hash list, YARA, `pefile` heuristics, behaviour rules, feature extraction, XGBoost triage, the ransomware entropy check, the evaluation (leave-one-batch-out, per-technique table, false-positive rate, rule-layer results) | The EMBER static model, tuning thresholds on live data |
+| **C** | Backend, ATT&CK vector DB, RAG agent, report validator and LLM reports, the dashboard demo from replayed sessions with approve and reject, the prompt-injection demo, the demo video | Backend API authentication, approving actions on a live system |
+| **All** | Verification in the VM (EICAR and UPX, entropy, enforcement test), the evaluation report, the design review | A full live end-to-end integration |
+
+---
+
 ## 1. The split: three independent tracks
 
 The pipeline has three natural parts. Each track is owned end to end.
@@ -11,7 +24,7 @@ The pipeline has three natural parts. Each track is owned end to end.
 | Track | Owner | Short name | Owns | Scanner generations covered |
 |---|---|---|---|---|
 | **A** | Ahmed Mubeen (repository lead) | **Sense & Enforce** | C++ ETW/Sysmon agent, FIM, ABAC policy engine, enforcement actions, lab VM, data recording | 2nd (integrity), 3rd (telemetry), 4th (access control) |
-| **B** | Haider Shahid / Ahmed Muaz | **Detect & Score** | Hash list, YARA, static heuristics + EMBER model, behaviour rules, feature extraction, XGBoost triage | 1st, 2nd (heuristics), 3rd (rules), 4th (ML) |
+| **B** | Haider Shahid / Ahmed Muaz | **Detect & Score** | Hash list, YARA, static heuristics + EMBER model (the EMBER model is future work), behaviour rules, feature extraction, XGBoost triage | 1st, 2nd (heuristics), 3rd (rules), 4th (ML) |
 | **C** | Haider Shahid / Ahmed Muaz | **Explain & Show** | FastAPI backend, pipeline orchestration, ATT&CK vector DB, RAG agent, report validator, React dashboard | 4th (AI reports), presentation layer |
 
 ### Folder ownership
@@ -76,7 +89,7 @@ Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 |---|---|---|
 | **All** | Agree contracts, test technique list, held-out techniques, number of benign sessions. Set up WSL and Claude Code (`docs/lab-setup.md` Parts 2–3) | Committed to `contracts/` and PLANNING.md |
 | **A** | Lab VM (`docs/lab-setup.md` Part 1). Create the GitHub repo, `.gitignore`, and commit `.claude/settings.json` | Repo visible to all three. VM snapshot `clean-baseline` exists |
-| **B** | Python environment for ML in WSL. Download EMBER (to the large drive, not the repo). Check each listed Atomic technique has a Windows test | Technique list confirmed |
+| **B** | Python environment for ML in WSL. Download EMBER (to the large drive, not the repo) **(future work)**. Check each listed Atomic technique has a Windows test | Technique list confirmed |
 | **C** | JSON Schemas, sample files and `validate_samples.py`. Create free-tier LLM API keys for testing | Samples validate |
 
 **Dependencies:** none. This is the only phase where all three work together.
@@ -95,8 +108,8 @@ Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 
 | Member | Tasks | Done when |
 |---|---|---|
-| **A** | Add network events and Sysmon Event IDs 3 (network), 10 (LSASS access), 12 and 13 (registry). FIM module for Run/RunOnce keys, startup folders, hosts file. **Record the dataset**: benign sessions, Atomic runs and our T1486 script, labelled by the launched process tree. Export logs before each rollback (PLANNING.md 3.2) | Labelled dataset shared with B (shared folder or drive, not the repo) |
-| **B** | Behaviour rules in Sigma-style YAML for each test technique, and `match_rules`. Feature extraction code written and tested on sample events or public pre-recorded data (e.g. OTRF Security-Datasets converted to our schema). Train the EMBER static model | Each rule fires on its sample; features compute without errors |
+| **A** | Add network events and Sysmon Event IDs 3 (network), 10 (LSASS access), 12 and 13 (registry). FIM module for Run/RunOnce keys, startup folders, hosts file. **Record the dataset**: benign sessions, Atomic runs and our T1486 script, labelled by the launched process tree. **Release: batches 1 to 6 and batch 9 only, 47 sessions (PLANNING.md 2.1).** Export logs before each rollback (PLANNING.md 3.2) | Labelled dataset shared with B (shared folder or drive, not the repo) |
+| **B** | Behaviour rules in Sigma-style YAML for each test technique, and `match_rules`. Feature extraction code written and tested on sample events or public pre-recorded data (e.g. OTRF Security-Datasets converted to our schema). Train the EMBER static model **(future work)** | Each rule fires on its sample; features compute without errors |
 | **C** | Load ATT&CK STIX data into ChromaDB. Retrieval tests. RAG prompt template with `<telemetry>` delimiters. Compare free-tier providers on a sample report. Dashboard pages for decisions, reports and FIM change approval (mock data) | "process reads LSASS memory" retrieves T1003.001 |
 
 **Dependency (small):** B needs A's labelled dataset **at the end of Phase 2** to train the real model. Until then B builds and tests the feature code on samples and public data, so B never stops working.
@@ -105,8 +118,8 @@ Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 
 | Member | Tasks | Done when |
 |---|---|---|
-| **A** | ABAC policy engine `decide` reading `rules/policy.yaml`. Enforcement `execute`: suspend, firewall block, restore from baseline, Controlled Folder Access setup, each with undo and VM guard. Build the LSASS allowlist from benign data. **Test only in the VM** | Every policy rule has a passing test. Each action works on a harmless process |
-| **B** | Train XGBoost on A's dataset (split by session). Evaluate on test split and held-out techniques. Choose a risk threshold. Package `score_process`. Ransomware detector features (write rate, entropy of written files) | Metrics table written (precision, recall, FPR, held-out results) |
+| **A** | ABAC policy engine `decide` reading `rules/policy.yaml`. Enforcement `execute`: suspend, firewall block, restore from baseline, Controlled Folder Access setup, each with undo and VM guard. Build the LSASS allowlist from benign data **(future work, with the LSASS demonstration)**. **Test only in the VM** | Every policy rule has a passing test. Each action works on a harmless process |
+| **B** | Train XGBoost on A's dataset (split by session). **Release: leave-one-batch-out, so every session from one boot stays on one side, and a per-technique table with T1685 at 1 run.** Evaluate on test split and held-out techniques. Choose a risk threshold. Package `score_process`. Ransomware detector features (write rate, entropy of written files) | Metrics table written (precision, recall, FPR, held-out results) |
 | **C** | `write_report` with the LLM (no tools), behind a provider-agnostic client. Report validator for technique IDs. Pipeline orchestrator that calls B's and A's functions (stubs if not ready yet) | Report generated from a sample alert. Fake ID caught by the validator |
 
 **Dependencies (small):** C's orchestrator calls A's and B's functions, but stubs exist from Phase 0, so C is never blocked.
@@ -115,21 +128,23 @@ Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 
 All three work together on `main`. Each fixes problems in their own track.
 
+**Release:** recorded sessions replayed through detection, policy and reports into the dashboard, plus live zone demos in the VM. A full live end-to-end integration is future work (PLANNING.md 2.1).
+
 | Member | Tasks |
 |---|---|
-| **A** | Run the agent live in the lab VM feeding the pipeline. Fix enforcement issues. Run the four zone demos |
-| **B** | Tune thresholds on live data. Fix false positives. Confirm rules and model work on live agent output |
-| **C** | Connect the real functions in place of the stubs. Add the approve/reject flow. Build the prompt-injection demo. Polish the dashboard |
+| **A** | Run the agent live in the lab VM feeding the pipeline **(future work)**. Fix enforcement issues. Run the four zone demos **(release: documents and persistence, screen-recorded. The network zone's block action is verified by the enforcement test, and the LSASS demo is future work)** |
+| **B** | Tune thresholds on live data **(future work)**. Fix false positives. Confirm rules and model work on live agent output **(future work)** |
+| **C** | Connect the real functions in place of the stubs. Add the approve/reject flow **(release: on the replayed recorded sessions. Approving an action on a live system is future work, together with backend API authentication)**. Build the prompt-injection demo. Polish the dashboard |
 
-**Gate 4 checklist:** see PLANNING.md Phase 4.
+**Gate 4 checklist:** see PLANNING.md Phase 4, including its release-scope note.
 
 ### Phase 5: Evaluation and release
 
 | Member | Tasks |
 |---|---|
-| **A** | Zone demos, latency measurements, limitations section (detect-then-contain) |
-| **B** | ML evaluation, per-technique detection table, false-positive analysis |
-| **C** | LLM filtering stats, report accuracy, injection test results, demo video |
+| **A** | Zone demos **(release: documents and persistence)**, latency measurements, limitations section (detect-then-contain) |
+| **B** | ML evaluation **(release: leave-one-batch-out)**, per-technique detection table, false-positive analysis |
+| **C** | LLM filtering stats, report accuracy, injection test results, demo video **(release: documents and persistence demos, the dashboard replay and the prompt-injection test)** |
 | **All** | Bring the design docs in line with the code, write the evaluation report, hold an internal design review. **Everyone must be able to explain all layers**, not only their own |
 
 ## 4. Dependency map (the only handoffs)
@@ -139,7 +154,7 @@ Phase 0:      all three agree contracts + samples   (together)
 Phase 1–3:    B, C push code --> A runs VM-only checks (EICAR, UPX)
 Phase 2 end:  A --labelled dataset--> B             (small dependency; B works on samples until then)
 Phase 3:      A, B functions --> C orchestrator      (stubs used until real ones are ready)
-Phase 4:      integration in the lab VM              (together)
+Phase 4:      integration in the lab VM              (together; in the release: replayed sessions and the zone demos, the full live run is future work)
 ```
 
 Everything else is independent.
@@ -158,7 +173,7 @@ Simplify a layer, **never remove it**. All four generations must still exist in 
 |---|---|
 | A: C++ agent | Read Sysmon events first (via the Windows Event Log API), add raw ETW providers after |
 | A: enforcement | Implement suspend and firewall block first; restore and CFA after |
-| B: ML | Fewer features; static model from `pefile` features if EMBER setup blocks |
+| B: ML | Fewer features; static model from `pefile` features if EMBER setup blocks. In the release the EMBER model is future work, so the `pefile` heuristics stand for generation 2 |
 | B: rules | Fewer, well-tested behaviour rules |
 | C: dashboard | Plain tables and one detail page; styling last |
 | C: RAG | Retrieval + one prompt; skip multi-step agent chains |
