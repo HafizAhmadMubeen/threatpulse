@@ -142,7 +142,7 @@ The full list is in PLANNING.md Section 10.
 ## Accepted limitations
 
 - User-mode only: detect-then-contain, not prevention (e.g. LSASS access is reported after the handle opens).
-- LSASS under LSA protection: Windows denies the dump and the sensors see little of the attempt (the recorded T1003.001 test part is 2 events, with no `process_access` on `lsass.exe`). Sysmon Event ID 10 only helps where the access is visible. The command-line rule `R-T1003-002` is the layer that still fires, where the command line is captured, and the policy engine only alerts on it. The evaluation reports T1003.001 as a documented limitation, not as a model success or failure (PLANNING.md 4.3 and 8.1).
+- LSASS under LSA protection: Windows denies the dump and the sensors see little of the attempt (of the 5 recorded T1003.001 sessions, 4 have a 2-event test part and one has 56 events of normal PowerShell start-up, and none has a `process_access` on `lsass.exe`). Sysmon Event ID 10 only helps where the access is visible. The command-line rule `R-T1003-002` is the layer that still fires, where the command line is captured (4 of the 5 sessions), and the policy engine only alerts on it. The evaluation reports T1003.001 as a documented limitation, not as a model success or failure (PLANNING.md 4.3 and 8.1).
 - Persistence protection is detect-and-revert.
 - Windows only, single endpoint, prototype for controlled lab environments, not production EDR.
 
