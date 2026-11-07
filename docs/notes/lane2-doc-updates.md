@@ -348,3 +348,11 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 3. **PLANNING.md Section 4.3 (accepted limits):** the rule results are repeats of the same scripted tests, not a test against other implementations or evasion. No session exists yet for `R-T1105-001`, `R-T1685-001`, `R-FIM-HOSTS`, and none uses a Startup folder for `R-T1547-002`.
 4. **PHASES.md Step 2.7:** the gate "each rule fires on its Atomic test" is met for T1003.001 (by `R-T1003-002` in 3 of 4), T1053.005, T1059.001, T1218.011, T1486 and T1547.001. T1105 and T1685 are still open.
 5. **For Track A:** record sessions for T1105 (needs NAT) and T1685, a hosts-file change, and a Startup-folder persistence test, so the rules with no evidence yet can be checked. Keep the zip and extract sessions in the benign set.
+
+## Added on `track-b/training` (how T1003.001 trees are excluded)
+1. **PLANNING.md Section 10, Decided:** `| Limited trees | An attack tree is "limited" by technique (T1003.001), not by size. LSA protection blocks the dump, so the test part holds only the launcher's ordinary behaviour, however many events. It is left out of training by default (--include-limited-in-training puts it back) and is always reported apart, never in recall |`.
+2. **For Track A:** if a `T1003.001` test ever shows real LSASS access (LSA protection off in a separate recording), that is a different situation: say so, and the technique list would need to change. Until then every `T1003.001` test tree is treated as limited.
+
+## Added on `track-b/training` (T1003.001 left out of training by default)
+1. **PLANNING.md Section 10, Decided:** `| T1003.001 in training | Left out by default (--include-limited-in-training puts it back). Reason: a 2-event tree has no behaviour to learn, not the evaluation numbers. Both versions are reported. T1003.001 is always reported apart and never counts toward recall |`. The saved model is retrained: SHA-256 c9ee90469b20adb98ab4eff56b22ec209ad177e4c10e9309db7a956e8d0c7ff3, batches 1 to 4, local only.
+2. **PLANNING.md Section 5.6:** the rule proposes a threshold of 0.5 for the new saved model (in-sample for the choice). Nothing applies it: the policy keeps 0.80.

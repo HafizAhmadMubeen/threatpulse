@@ -74,7 +74,7 @@ uv run pytest tests/test_features.py
 
 ## Training and scoring (steps 3.4 and 3.5)
 
-**PRELIMINARY. 4 of 11 batches are used, with 4 ordinary attack trees per batch (and T1003.001 apart). These results show that the pipeline works. They do not say how well the model detects.** Batch 3 is its second run only (9 valid sessions, decided by the repository lead). The tables for 2 and 3 batches below are the earlier runs, kept for comparison. Batch 4 (7 sessions) is added in the last section.
+**PRELIMINARY. 4 of 11 batches are used, with 4 ordinary attack trees per batch (and T1003.001 apart). These results show that the pipeline works. They do not say how well the model detects.** Batch 3 is its second run only (9 valid sessions, decided by the repository lead). The tables for 2 and 3 batches below are the earlier runs, kept for comparison. **Since the last section, T1003.001 trees are left out of training by default** (a tree of 2 events has no behaviour to learn), and `--include-limited-in-training` puts them back. Batch 4 (7 sessions) is added in the last section.
 
 ```bash
 uv run python -m triage.train \
@@ -224,7 +224,7 @@ uv run python -m triage.train --only-labelled \
 
 Batch 4 is 7 sessions, all labelled (`batch-04-labels`): T1003.001, T1059.001, T1486, T1547.001 twice, and 2 benign. It has no held-out technique, so the held-out pair (T1053.005, T1218.011) has no new trees. T1685 is still not recorded. Each batch is tested by a model trained on the other three (whole-batch split). Three things changed in how results are reported:
 - **Counts and intervals.** Every rate is a count with its Wilson 95% interval, for example `15 of 16 (93.8%, 95% CI 71.7% to 98.9%)`.
-- **T1003.001 is reported apart.** LSA protection blocks the dump, so its test part has about 2 events. It is a documented limitation and never counts toward recall (recall below is over the ordinary attacks: T1486, T1547.001 twice, T1059.001). It is still in training.
+- **T1003.001 is reported apart.** LSA protection blocks the dump, so its test part has about 2 events. It is a documented limitation and never counts toward recall (recall below is over the ordinary attacks: T1486, T1547.001 twice, T1059.001). In the batch 4 run it was still in training; the default has since changed (see the last section).
 - **Threshold.** The fixed 0.50 and 0.80 are reported as they are. A threshold is also *chosen on the training folds only*: for each test batch, leave-one-batch-out inside the other batches, then the lowest value in {0.5, 0.6, 0.7, 0.8, 0.9, 0.95} whose pooled false-positive rate is at most 2%. The rule was fixed before any result was seen. Held-out trees and T1003.001 are not used for choosing, and the test batch is never looked at (a test checks that changing it does not move its threshold). 0.80 is not tuned anywhere.
 
 3 batches here is the earlier 3-batch run re-done with the same code, so T1003.001 is apart and the two columns are comparable. (The first 3-batch table counted it inside recall: 12 of 15 and 9 of 15.) Each batch was scored by a different model, so a sum is not one model's result.
@@ -289,12 +289,12 @@ What the numbers say, and don't:
 - **Ordinary attacks: 15 of 16 caught with both models at 0.80** (93.8%, 95% CI 71.7% to 98.9%), against 11 of 12 (complete) and 9 of 12 (snapshots) on 3 batches. Benign trees flagged at 0.80: 3 of 387 (0.8%) for the complete model and 6 of 387 (1.6%) for the snapshot model. Held-out techniques: 6 of 6 caught (CI 61% to 100%), 0 of 19 benign flagged for the snapshot model.
 - **The one miss is T1059.001 in batch 2** (score 0.08 complete, 0.35 snapshots). It is caught in the other three batches (0.96 to 0.99).
 - **The sample is smaller than the counts say.** The attacks are the same scripted tests run again in every batch (the two T1547.001 trees in a batch get the same score), so 16 trees are about 4 behaviours seen 4 times. Trees from different batches are not independent draws, and the intervals do not account for that.
-- **T1003.001 scores swing from 0.01 to 0.91** on trees of 2 events, and 2 of 4 were above 0.80 for the complete model. That is a near-empty tree landing at a random place in the model, not detection, and it is why it is not counted. Because these trees are in training as positives, they may teach the model that tiny trees are malicious. Dropping them from training is untested.
+- **T1003.001 scores swing from 0.01 to 0.91** on trees of 2 events, and 2 of 4 were above 0.80 for the complete model. That is a near-empty tree landing at a random place in the model, not detection, and it is why it is not counted. Because these trees are in training as positives, they may teach the model that tiny trees are malicious. Leaving them out of training is tested in the last section, and is now the default.
 - **Thresholds.** With 3 batches the inner folds train on a single batch, no value met the 2% cap in 4 of 6 fold models, the rule fell back to 0.95, and held-out recall at the chosen threshold was 2 of 6 for the complete model. With 4 batches the cap is met in every fold (chosen 0.5 to 0.9) and the results match the fixed 0.80: 15 of 16 caught, 6 of 6 held-out. So the rule needs three or more training batches to be useful.
 - **Proposed threshold for the saved model: 0.7.** It is chosen by leave-one-batch-out over the same four batches the model is trained on (15 of 16 attacks caught, 6 of 387 benign flagged there), so its numbers are in-sample for the choice. It is a proposal and is not applied anywhere: the policy keeps its own thresholds. I would not move the policy off 0.80 on this.
 - **Skew.** Snapshot training keeps attacks flagged early: 28 of 30 (93.3%, 95% CI 78.7% to 98.2%) against 10 of 30 (33.3%, 95% CI 19.2% to 51.2%) for the complete model. Benign trees flagged early only: 8 of 314 and 11 of 314.
 - **At alert time** (pipeline replay) only 3 benign-session alerts were scored in all four batches, so the false-alarm evidence is 3 alerts: the snapshot model put 1 of 3 at 0.80 or more, the complete model 3 of 3. Malicious-session alerts at 0.80 or more: 25 of 26 for both. Alert-time scoring is still not ready to drive policy, so `--use-model` stays off by default.
-- **The saved model** is the snapshot model trained on batches 1 to 4 (28 training sessions), SHA-256 `e34707ec2e08e58a5085046b1bc514e778fe4cc083fb4bb8307afcc55b738d78`. It stays local and gitignored.
+- **The saved model** is the snapshot model trained on batches 1 to 4 (28 training sessions), SHA-256 `e34707ec2e08e58a5085046b1bc514e778fe4cc083fb4bb8307afcc55b738d78`. It stays local and gitignored. **Superseded** by the default retrain in the last section (SHA-256 `c9ee9046…`).
 
 ```bash
 uv run python -m triage.train --only-labelled \
@@ -307,7 +307,7 @@ uv run python -m triage.compare "3 batches=data/runs/training-lobo-123/report.js
 
 ### Leaving T1003.001 out of training (4 batches)
 
-T1003.001 trees (about 2 events, because LSA protection blocks the dump) are reported apart and never count toward recall. Question: should they also be left out of training? `--exclude-limited-from-training` leaves them out everywhere: the outer folds, the threshold's inner folds and the saved model. Their benign neighbours in the same sessions stay. Same 4 batches, same leave-one-batch-out, same threshold rule; only this changes.
+T1003.001 trees (about 2 events, because LSA protection blocks the dump) are reported apart and never count toward recall. **They are now left out of training by default**, everywhere: the outer folds, the threshold's inner folds and the saved model. `--include-limited-in-training` puts them back. Their benign neighbours in the same sessions stay. The comparison below is the same 4 batches, the same leave-one-batch-out and the same threshold rule, with only this changed. **Both versions are reported**: the column "with T1003.001 in training" is the old default, and "without" is the new one.
 
 | complete model, summed over the held-out batches | with T1003.001 in training | without T1003.001 in training |
 |---|---|---|
@@ -354,15 +354,25 @@ What changed, in counts:
 - **One held-out tree is lost at 0.80 for the snapshot model: 6 of 6 became 5 of 6.** It is T1218.011 in batch 2, 0.858 to 0.793, just under the line. At the threshold chosen on the training folds it is 6 of 6 both ways.
 - Every group is a handful of trees and the intervals overlap, so none of these differences is established. The direction is consistent: fewer false positives, no loss of recall.
 
-**Recommendation: leave T1003.001 out of training.** The reason is mechanical, not statistical. A tree of 2 events labelled "attack" has no behaviour signature to learn. With so little in it, it looks like many ordinary tiny benign trees, so training on it can only push those up, and the numbers above move that way (fewer benign flags, none of 4 T1003.001 trees scoring high by accident). Detecting T1003.001 is the rule layer's job (`R-T1003-002` fired in 3 of 4 sessions, see `detection/README.md`), not the model's. Against it: a few trees, and one held-out tree slipped just under 0.80. I have not changed the default, and the saved model is still the one trained with them in (SHA-256 above in the batch 4 section). To get the recommended model:
+**How a tree counts as limited: by technique, not by size.** A tree is set apart when it is an attack tree (its test part is labelled malicious) whose technique is `T1003.001`. That list is `LIMITATION_TECHNIQUES` in `triage/dataset.py`. The number of events plays no part. So a `T1003.001` tree of 56 events that is only normal PowerShell start-up, with no LSASS access, is left out of training and reported apart exactly like the 2-event ones, and a tiny attack tree of any other technique is not limited and trains. (The `MIN_SNAPSHOT_EVENTS` rule is only about partial snapshots and has nothing to do with this.) Tests cover both cases. The reason for going by technique is that LSA protection blocks the credential dump, so what the test part of a `T1003.001` session holds is the launcher's ordinary behaviour, however many events it has: the technique's behaviour is never in it, and labelling it "attack" would teach the model that ordinary PowerShell start-up is malicious.
+
+**Why it is the default: a 2-event tree has no behaviour to learn.** This is the reason, and it does not rest on the numbers above. A tree of 2 events labelled "attack" has no behaviour signature in it, so a model can only memorise how little there is. With so little in it, such a tree looks like many ordinary tiny benign trees, and training on it can only push those up. The evaluation was run to check that nothing is lost, and it agrees in direction: fewer benign flags, no loss of ordinary recall, and none of the 4 T1003.001 trees scoring high by accident. But the differences are a handful of trees with overlapping intervals, and one held-out tree slipped just under 0.80, so they are not what justifies the choice. Detecting T1003.001 is the rule layer's job (`R-T1003-002` fired in 3 of 4 sessions, see `detection/README.md`), not the model's. The trees are still reported apart and never count toward recall, in either version.
+
+To get the old behaviour back, for a comparison:
 
 ```bash
-uv run python -m triage.train --only-labelled --exclude-limited-from-training \
+uv run python -m triage.train --only-labelled --include-limited-in-training \
   --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
   --batch 3 $E/batch-03 $E/batch-03-labels --batch 4 $E/batch-04 $E/batch-04-labels \
-  --out data/runs/training-lobo-1234-no1003
-uv run python -m triage.compare "with T1003.001 in training=data/runs/training-lobo-1234/report.json" \
-  "without T1003.001 in training=data/runs/training-lobo-1234-no1003/report.json"
+  --out data/runs/training-lobo-1234
 ```
 
 `--use-model` stays off by default and the policy threshold stays at 0.80.
+
+### The saved model with the new default
+
+Retrained on batches 1 to 4 with T1003.001 left out of training (the default), prefix snapshots, 28 training sessions, 50 positive and 754 negative training rows:
+
+- **SHA-256: `c9ee90469b20adb98ab4eff56b22ec209ad177e4c10e9309db7a956e8d0c7ff3`** (it replaces `e34707ec2e08e58a5085046b1bc514e778fe4cc083fb4bb8307afcc55b738d78`, the version trained with T1003.001 in). It is local and gitignored. The run summary prints the SHA-256 of whatever model is loaded.
+- The leave-one-batch-out results of this run are identical, number for number, to the explicit "without T1003.001" run in the previous section, so the default reproduces it.
+- The threshold the rule proposes for it is **0.5**. It is chosen by leave-one-batch-out over the same four batches the model is trained on, so it is in-sample for the choice, and it is only a proposal. Nothing applies it: the policy threshold stays at **0.80** and `--use-model` stays off by default.

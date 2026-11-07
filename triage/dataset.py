@@ -117,11 +117,12 @@ def load_batch(number: int, sessions_dir: Path, labels_dir: Path, only_labelled:
     return trees
 
 
-def training_trees(batches: dict[int, list[Tree]], numbers: list[int], exclude_limited: bool = False) -> list[Tree]:
-    """The trees a model trains on. `exclude_limited` leaves out the documented-limitation attack
-    trees (T1003.001). Their benign neighbours in the same sessions always stay."""
+def training_trees(batches: dict[int, list[Tree]], numbers: list[int], include_limited: bool = False) -> list[Tree]:
+    """The trees a model trains on. The documented-limitation attack trees (T1003.001) are LEFT
+    OUT unless `include_limited`: a tree of about 2 events has no behaviour to learn. Their
+    benign neighbours in the same sessions always stay."""
     return [t for n in numbers for t in batches[n]
-            if t.usable and not t.held_out and not (exclude_limited and t.limited)]
+            if t.usable and not t.held_out and (include_limited or not t.limited)]
 
 
 def evaluation_trees(batch: list[Tree]) -> tuple[list[Tree], list[Tree]]:

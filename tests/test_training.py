@@ -656,8 +656,9 @@ def test_t1003_attack_trees_are_set_apart_and_never_count_toward_recall(with_lsa
         assert all(t.row["tree_id"] != limited[0].row["tree_id"] for t in ordinary + held_out)
         # Its benign neighbours in the same session stay negatives.
         assert any(t.row["session_id"] == f"s{n}-lsass" and not t.positive for t in ordinary)
-    # Still in training: only the recall figure leaves it out.
-    assert any(t.limited for t in dataset.training_trees(batches, [1, 2, 3]))
+    # Left out of training by default, and still there when asked for.
+    assert not any(t.limited for t in dataset.training_trees(batches, [1, 2, 3]))
+    assert any(t.limited for t in dataset.training_trees(batches, [1, 2, 3], include_limited=True))
     report = train.run(spec(with_lsass), None)
     for fold in report["folds"]:
         m = fold["models"]["snapshots"]
@@ -705,32 +706,106 @@ def test_the_comparison_tables_show_counts_with_intervals_for_each_report(export
     assert "T1003.001 score (events)" in text
 
 
-# ---- leaving T1003.001 out of training ------------------------------------------------------
+# ---- T1003.001 is left out of training by default ------------------------------------------
 
 
-def test_excluding_limited_trees_removes_only_those_trees_from_training(with_lsass):
+def test_limited_trees_are_left_out_of_training_by_default_and_can_be_put_back(with_lsass):
     batches = {n: trees_of(with_lsass, n) for n in (1, 2, 3)}
-    with_it = dataset.training_trees(batches, [1, 2, 3])
-    without = dataset.training_trees(batches, [1, 2, 3], exclude_limited=True)
-    assert any(t.limited for t in with_it) and not any(t.limited for t in without)
-    assert len(with_it) - len(without) == sum(t.limited for t in with_it) == 2
+    default = dataset.training_trees(batches, [1, 2, 3])
+    included = dataset.training_trees(batches, [1, 2, 3], include_limited=True)
+    assert not any(t.limited for t in default) and any(t.limited for t in included)
+    assert len(included) - len(default) == sum(t.limited for t in included) == 2
     # Their benign neighbours (same sessions) stay, and held-out sessions never train either way.
-    assert any(t.row["session_id"] == "s1-lsass" and not t.positive for t in without)
-    assert not any(t.held_out for t in with_it + without)
-    assert {r["session_id"] for r in train.training_rows("snapshots", without)} == {t.row["session_id"] for t in without}
+    assert any(t.row["session_id"] == "s1-lsass" and not t.positive for t in default)
+    assert not any(t.held_out for t in default + included)
+    assert {r["session_id"] for r in train.training_rows("snapshots", default)} == {t.row["session_id"] for t in default}
 
 
-def test_the_flag_reaches_every_training_step_and_t1003_is_still_reported_apart(with_lsass, monkeypatch):
+def test_the_default_reaches_every_training_step_and_t1003_is_still_reported_apart(with_lsass, monkeypatch):
     seen = []
     real = dataset.training_trees
-    monkeypatch.setattr(train, "training_trees", lambda b, n, exclude_limited=False: seen.append(exclude_limited) or real(b, n, exclude_limited))
-    report = train.run(spec(with_lsass), None, exclude_limited_from_training=True)
-    assert seen and all(seen)  # outer folds, the threshold's inner folds and the final model
+    monkeypatch.setattr(train, "training_trees", lambda b, n, include_limited=False: seen.append(include_limited) or real(b, n, include_limited))
+    report = train.run(spec(with_lsass), None)
+    assert seen and not any(seen)  # outer folds, the threshold's inner folds and the final model
     assert report["documented_limitation"]["in_training"] is False and "LEFT OUT" in report["documented_limitation"]["note"]
+    assert "no behaviour to learn" in report["documented_limitation"]["note"]
     assert report["final_model"]["t1003_in_training"] is False
     for fold in report["folds"]:
         assert fold["models"]["snapshots"]["documented_limitation"]["trees"] == (1 if fold["test_batch"] in (1, 2) else 0)
     assert report["pooled"]["snapshots"]["documented_limitation"]["trees"] == 2
-    default = train.run(spec(with_lsass), None)
-    assert default["documented_limitation"]["in_training"] is True and default["final_model"]["t1003_in_training"] is True
-    assert default["final_model"]["n_positive"] > report["final_model"]["n_positive"]
+    seen.clear()
+    included = train.run(spec(with_lsass), None, include_limited_in_training=True)
+    assert seen and all(seen)
+    assert included["documented_limitation"]["in_training"] is True and included["final_model"]["t1003_in_training"] is True
+    assert included["final_model"]["n_positive"] > report["final_model"]["n_positive"]
+
+
+def test_the_cli_default_leaves_them_out_and_the_old_flag_is_gone(with_lsass, tmp_path):
+    import inspect
+    source = inspect.getsource(train.main)
+    assert "--include-limited-in-training" in source and "--exclude-limited-from-training" not in source
+    assert inspect.signature(train.run).parameters["include_limited_in_training"].default is False
+    assert inspect.signature(dataset.training_trees).parameters["include_limited"].default is False
+    code = train.main(["--batch", "1", str(with_lsass / "batch-1"), str(with_lsass / "batch-1-labels"),
+                       "--batch", "2", str(with_lsass / "batch-2"), str(with_lsass / "batch-2-labels"),
+                       "--batch", "3", str(with_lsass / "batch-3"), str(with_lsass / "batch-3-labels"),
+                       "--out", str(tmp_path / "out")])
+    assert code == 0
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["documented_limitation"]["in_training"] is False
+
+
+# ---- the exclusion is by technique, not by size ----------------------------------------------
+
+
+def powershell_startup_recording(events_in_tree: int) -> Recording:
+    """One process that only starts, writes some temp files and stops: what a PowerShell
+    start-up looks like when LSA protection stopped the dump. No LSASS access at all."""
+    recording = Recording()
+    shell = P(200, 100, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "powershell.exe")
+    recording.start(shell, 1.0)
+    for i in range(events_in_tree - 2):
+        recording.add(shell, "file_write", 1.1 + i * 0.01, path=f"C:\\Windows\\Temp\\ps-startup-{i}.tmp")
+    recording.stop(shell, 2.0)
+    return recording
+
+
+def test_a_t1003_tree_is_excluded_whatever_its_size_a_56_event_one_included(export):
+    make_session(export, "s1-lsass56", powershell_startup_recording(56), batch=1, technique="T1003.001")
+    batches = {n: trees_of(export, n) for n in (1, 2, 3)}
+    tree = next(t for t in batches[1] if t.row["session_id"] == "s1-lsass56" and t.positive)
+    assert tree.row["n_events"] == 56 and tree.row["technique"] == "T1003.001"
+    assert tree.row["sysmon_lsass_access"] == 0 and tree.row["sysmon_lsass_vm_read"] == 0  # normal start-up only
+    assert tree.limited  # by technique: 56 events does not make it a normal attack tree
+    assert tree in dataset.limited_trees(batches[1])
+    ordinary, held_out = dataset.evaluation_trees(batches[1])
+    assert tree not in ordinary + held_out  # never in recall
+    default = dataset.training_trees(batches, [1, 2, 3])
+    assert tree not in default
+    assert tree in dataset.training_trees(batches, [1, 2, 3], include_limited=True)
+    assert tree.row["tree_id"] not in {r["tree_id"] for r in train.training_rows("snapshots", default)}
+    # Reported apart, with its real size, in the fold that tests batch 1.
+    report = train.run(spec(export), None)
+    fold = next(f for f in report["folds"] if f["test_batch"] == 1)
+    items = fold["models"]["snapshots"]["documented_limitation"]["items"]
+    assert [i["n_events"] for i in items] == [56]
+    assert report["final_model"]["t1003_in_training"] is False
+
+
+def test_a_tiny_attack_tree_of_another_technique_is_not_limited_and_stays_in_training(export):
+    """The rule is not 'few events': a 2-event tree of a technique that is not listed trains."""
+    make_session(export, "s1-tiny", powershell_startup_recording(2), batch=1, technique="T1486")
+    batches = {n: trees_of(export, n) for n in (1, 2, 3)}
+    tree = next(t for t in batches[1] if t.row["session_id"] == "s1-tiny" and t.positive)
+    assert tree.row["n_events"] == 2 and tree.row["technique"] == "T1486"
+    assert not tree.limited
+    assert tree in dataset.training_trees(batches, [1, 2, 3])
+    ordinary, _ = dataset.evaluation_trees(batches[1])
+    assert tree in ordinary and tree not in dataset.limited_trees(batches[1])
+
+
+def test_the_limited_techniques_are_a_list_of_techniques_not_a_size_limit():
+    assert dataset.LIMITATION_TECHNIQUES == ("T1003.001",)
+    import inspect
+    source = inspect.getsource(dataset.Tree.limited.fget)
+    assert "LIMITATION_TECHNIQUES" in source and "n_events" not in source and "MIN_SNAPSHOT_EVENTS" not in source
