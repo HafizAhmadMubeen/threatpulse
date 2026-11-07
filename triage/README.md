@@ -74,7 +74,7 @@ uv run pytest tests/test_features.py
 
 ## Training and scoring (steps 3.4 and 3.5)
 
-**PRELIMINARY. 2 of 11 batches exist, with 5 training positives per batch. These results show that the pipeline works. They do not say how well the model detects.** Batch 3 waits for Track A to decide which of its two overlapping sets to use.
+**PRELIMINARY. 3 of 11 batches are used, with 5 training positives per batch. These results show that the pipeline works. They do not say how well the model detects.** Batch 3 is its second run only (9 valid sessions, decided by the repository lead). The tables for 2 batches below are the earlier runs, kept for comparison.
 
 ```bash
 uv run python -m triage.train \
@@ -175,3 +175,47 @@ How training differs from runtime, and what that costs:
 The harness and the start-up events exist only in lab recordings. A real endpoint has no harness, but a replay of our recordings does, so replayed alert-time scores describe a harder case than training saw. The pipeline-replay rows in the skew table above are measured this way, label-free.
 
 Enforced by tests: scoring opens no file at all (every file read is blocked while it runs), extra label fields on events change nothing, renaming every process, path, command line and address changes nothing, the scorer and the pipeline's run module never name label files, and `score_process`'s only parameter is `events`.
+
+### Batch 3 added (3 of 11 batches, step 3.4 third run)
+
+Batch 3 is the second run only: 9 sessions, labels in `batch-03-labels` (`--only-labelled`). The 6 sessions of the first attempt are left out as a whole and listed by name in the report. Split by whole batch: each batch is tested by a model trained on the other two. Batch 3 is one batch with a busier background than batches 1 and 2 (the VM had been up for over 1 h 40 min), so it is kept together. T1685 is still not recorded, so the held-out techniques are T1053.005 and T1218.011. Batch 4 exists in the export and is not used.
+
+Complete test trees at **0.80**, with the 2-batch run beside the 3-batch run (`complete` = trained on complete trees, `snapshots` = trained on prefix snapshots; each test batch is tested by a model that never saw it). Count is TP, FN, then false positives of negatives.
+
+| Test batch | 2 batches: complete | 2 batches: snapshots | 3 batches: complete | 3 batches: snapshots |
+|---|---|---|---|---|
+| 1, ordinary | TP 5 FN 0, FP 12/117 | TP 4 FN 1, FP 7/117 | TP 5 FN 0, FP 4/117 | TP 3 FN 2, FP 1/117 |
+| 1, held-out | TP 2 FN 0, FP 0/1 | TP 2 FN 0, FP 0/1 | TP 1 FN 1, FP 0/1 | TP 2 FN 0, FP 0/1 |
+| 2, ordinary | TP 4 FN 1, FP 0/44 | TP 4 FN 1, FP 0/44 | TP 3 FN 2, FP 0/44 | TP 2 FN 3, FP 0/44 |
+| 2, held-out | TP 1 FN 1, FP 0/7 | TP 2 FN 0, FP 0/7 | TP 2 FN 0, FP 0/7 | **TP 0 FN 2**, FP 0/7 |
+| 3, ordinary | not tested | not tested | TP 4 FN 1, FP 1/112 | TP 4 FN 1, FP 4/112 |
+| 3, held-out | not tested | not tested | TP 2 FN 0, FP 1/11 | TP 2 FN 0, FP 0/11 |
+| **Sum of the test batches, ordinary** | recall 9/10, FP 12/161 | recall 8/10, FP 7/161 | recall 12/15, FP 5/273 | recall 9/15, FP 5/273 |
+| **Sum of the test batches, held-out** | recall 3/4, FP 0/8 | recall 4/4, FP 0/8 | recall 5/6, FP 1/19 | recall 4/6, FP 0/19 |
+
+Sums add up per-batch counts from different models. They are not one model's results.
+
+Skew between partial and complete trees (snapshots of the test trees at 25, 50 and 75% of their time span, and pipeline alerts, label-free):
+
+| | 2 batches: complete | 2 batches: snapshots | 3 batches: complete | 3 batches: snapshots |
+|---|---|---|---|---|
+| Attacks still flagged at 0.5 early | 8 of 14 | 14 of 14 | 5 of 21 | 20 of 21 |
+| Worst attack \|difference\| to the complete tree | 0.87 | 0.05 | 0.95 | 0.91 |
+| Benign trees flagged early only | 3 | 2 | 5 | 5 |
+| Benign-session alerts at or above 0.8 at alert time (batch 1, 2, 3) | 1, 1, - | 1, 0, - | 1, 1, 1 | 1, 0, 0 |
+| Malicious-session alerts at or above 0.8 at alert time | 8/8, 7/7, - | 8/8, 7/7, - | 8/8, 6/7, 8/8 | 8/8, **2/7**, 8/8 |
+| Alert time vs complete tree, max \|difference\| | 0.76, 0.76 | 0.95, 0.18 | 0.91, 0.93, 0.95 | 0.96, 0.63, 0.16 |
+
+What the numbers say, and don't:
+- **False positives went down with more data, for both models:** 12 of 161 and 7 of 161 became 5 of 273 (1.8%). More benign trees in training helps, as expected.
+- **Recall at 0.80 went down, most for the snapshot model:** 9 of 15 against 12 of 15 for the complete model. Test batch 2 is the weak one for both: adding batch 3, with its busier background, took recall on batch 2 from 4 of 5 to 3 of 5 (complete) and 2 of 5 (snapshots). At 0.50 the snapshot model keeps 3 of 5, and the held-out pair in batch 2 drops from 2 of 2 to 0 of 2 at 0.80. Scores are uncalibrated and the threshold was not tuned, so this is as much a threshold effect as a model one. It needs leave-one-batch-out over more batches.
+- **Snapshot training still keeps attacks flagged early** (20 of 21 against 5 of 21), which is what it was for. The skew is not gone: one attack tree has a 0.91 difference at 25% of its span, in the batch 3 fold.
+- **At alert time the snapshot model scores fewer benign alerts at or above 0.8** (1 of 3 batches against 3 of 3), but in batch 2 only 2 of 7 malicious-session alerts reach 0.8. Alert-time scoring is still not ready to drive policy, so `--use-model` stays off by default.
+- **There is no clear winner.** Each group has 1 to 9 attack trees, so every difference above is a few trees. The intervals in `report.json` say so.
+- **The saved model** is the snapshot model trained on batches 1 to 3 (21 training sessions), SHA-256 `dc2907908b81758a9e67b33f23110423deaf8a40692e9aad58ec89a4a1dcf0cd`. It stays local and gitignored.
+
+```bash
+uv run python -m triage.train --only-labelled \
+  --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
+  --batch 3 $E/batch-03 $E/batch-03-labels --out data/runs/training-snap-123
+```

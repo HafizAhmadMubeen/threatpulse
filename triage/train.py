@@ -29,7 +29,7 @@ from triage import model as model_module
 from triage import score as score_module
 from triage.dataset import (HELD_OUT_TECHNIQUES, MIN_SNAPSHOT_EVENTS, SNAPSHOT_FRACTIONS, DatasetError, Tree,
                             balance_table, evaluation_trees, load_batch, session_folders, snapshot_rows,
-                            snapshot_training_rows, training_trees)
+                            snapshot_training_rows, training_trees, unlabelled_sessions)
 from triage.features import events_of_tree_containing, tree_feature_row
 from triage.metrics import confusion
 
@@ -160,9 +160,11 @@ def alert_time_skew(booster, folders: list[Path]) -> dict:
     }
 
 
-def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None) -> dict:
-    batches = {n: load_batch(n, sessions, labels) for n, sessions, labels in batches_spec}
-    folders = {n: session_folders(sessions) for n, sessions, _ in batches_spec}
+def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_labelled: bool = False) -> dict:
+    batches = {n: load_batch(n, sessions, labels, only_labelled) for n, sessions, labels in batches_spec}
+    folders = {n: session_folders(sessions, labels, only_labelled) for n, sessions, labels in batches_spec}
+    skipped = ({n: unlabelled_sessions(sessions, labels) for n, sessions, labels in batches_spec}
+               if only_labelled else {})
     numbers = sorted(batches)
     if len(numbers) < 2:
         raise DatasetError("need at least two labelled batches to split by batch")
@@ -177,6 +179,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None) -> dic
         "params": {**model_module.PARAMS, "rounds": model_module.ROUNDS},
         "snapshots": {"fractions": list(SNAPSHOT_FRACTIONS), "min_events_for_a_partial_snapshot": MIN_SNAPSHOT_EVENTS},
         "balance": balance_table(batches),
+        "sessions_left_out_for_having_no_labels": {str(n): names for n, names in skipped.items() if names},
         "folds": [],
     }
     for test in numbers:
@@ -223,6 +226,8 @@ def fmt_rate(r: dict) -> str:
 
 def text_report(report: dict) -> str:
     lines = [report["status"], "", "Class balance (usable trees: start observed, harness left out):"]
+    for n, names in report.get("sessions_left_out_for_having_no_labels", {}).items():
+        lines.append(f"Batch {n}: {len(names)} session(s) left out, no labels (decided out): " + ", ".join(names))
     for row in report["balance"]:
         lines.append(f"  batch {row['batch']} {row['group']:9} positives {row['positive_trees']:3}  "
                      f"negatives {row['negative_trees']:4}  dropped (no start event) {row['unobserved_start_dropped']}")
@@ -269,6 +274,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch", nargs=3, action="append", metavar=("NUMBER", "SESSIONS", "LABELS"), required=True,
                         help="a batch number, its session folder, and its labels folder. Repeat per batch")
     parser.add_argument("--out", type=Path, required=True, help="where report.json and report.txt go (not inside an input)")
+    parser.add_argument("--only-labelled", action="store_true",
+                        help="leave out sessions that have no labels (a batch that holds a first attempt that was "
+                             "decided out). They are listed by name in the report. Without it, a session "
+                             "without labels stops the run")
     parser.add_argument("--no-save", action="store_true", help="do not write triage/models/")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -279,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
             if out == folder or folder in out.parents:
                 parser.error(f"--out must not be inside an input folder: {folder}")
     try:
-        report = run(spec, None if args.no_save else score_module.MODEL_DIR)
+        report = run(spec, None if args.no_save else score_module.MODEL_DIR, args.only_labelled)
     except (DatasetError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

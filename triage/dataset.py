@@ -55,8 +55,25 @@ class Tree:
         return self.row["observed_start"] == 1 and self.row["harness_excluded"] == 1
 
 
-def session_folders(sessions_dir: Path) -> list[Path]:
-    folders = sorted(p for p in sessions_dir.iterdir() if (p / "events.jsonl").is_file())
+def all_session_folders(sessions_dir: Path) -> list[Path]:
+    return sorted(p for p in sessions_dir.iterdir() if (p / "events.jsonl").is_file())
+
+
+def unlabelled_sessions(sessions_dir: Path, labels_dir: Path) -> list[str]:
+    """Sessions with no labels.csv in the labels folder. Used only when a batch holds
+    sessions that were decided out (batch 3's first attempt), and always reported by name."""
+    return [p.name for p in all_session_folders(sessions_dir) if not (labels_dir / p.name / "labels.csv").is_file()]
+
+
+def session_folders(sessions_dir: Path, labels_dir: Path | None = None, only_labelled: bool = False) -> list[Path]:
+    """Every session folder. With `only_labelled`, only those the labels folder covers: a
+    session without labels is then left out on purpose, and a missing labels.csv is no error.
+    Without it (the default) a session without labels stops the run."""
+    folders = all_session_folders(sessions_dir)
+    if only_labelled:
+        if labels_dir is None:
+            raise DatasetError("only_labelled needs a labels folder")
+        folders = [p for p in folders if (labels_dir / p.name / "labels.csv").is_file()]
     if not folders:
         raise DatasetError(f"{sessions_dir}: no session folders")
     return folders
@@ -73,9 +90,9 @@ def check_pool(tree: Tree) -> None:
         )
 
 
-def load_batch(number: int, sessions_dir: Path, labels_dir: Path) -> list[Tree]:
+def load_batch(number: int, sessions_dir: Path, labels_dir: Path, only_labelled: bool = False) -> list[Tree]:
     trees: list[Tree] = []
-    for folder in session_folders(sessions_dir):
+    for folder in session_folders(sessions_dir, labels_dir, only_labelled):
         try:
             pairs = extract_session_trees(folder, labels_dir, from_start=True)
         except SessionError as error:

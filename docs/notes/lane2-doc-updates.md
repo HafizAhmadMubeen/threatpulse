@@ -324,3 +324,9 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 1. **PLANNING.md Section 5.6 / 4.1:** the scorer is label-free. It takes a process tree's events and nothing else. It never reads labels, `session.json`, the harness, names, paths or command lines. See `triage/README.md` "Scoring scope".
 2. **PLANNING.md Section 4.3 (accepted limits):** a replayed lab recording is scored with the harness inside the tree and with sensor start-up events, which training left out. That is a harder case than a real endpoint, and it makes replayed alert-time scores pessimistic.
 3. **ROADMAP.md Section 2, `score_process`:** the signature is `score_process(events)`, and the events are the tree containing the alerting process, cut at the first ancestor whose start was not seen.
+
+## Added on `track-b/training` (batch 3)
+1. **PLANNING.md Section 10, Decided:** `| Batch 3 | Second run only (9 sessions). The first attempt (6 sessions) is excluded as a whole. Batch 3 has a busier background than batches 1 and 2, and is kept together in the split |`.
+2. **PLANNING.md Section 8.3:** first results on 3 batches are in `triage/README.md`. Recall at 0.80 fell when batch 3 joined training (12 of 15 for the complete-tree model, 9 of 15 for the snapshot model), false positives fell (5 of 273). Nothing is conclusive: each group has 1 to 9 attack trees.
+3. **PHASES.md Step 3.4:** batches 1 to 3 done. Open: batches 4 to 11 (batch 4 is in the export), T1685 held-out, leave-one-batch-out to choose thresholds, a decision on how to handle a batch-level shift in the background.
+4. **PHASES.md Step 3.9:** `python -m triage.train --only-labelled` leaves out sessions with no labels, and names them.

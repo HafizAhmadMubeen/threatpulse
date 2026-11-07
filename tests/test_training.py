@@ -545,3 +545,39 @@ def test_the_harness_is_not_removed_at_runtime_and_the_scorer_says_so(with_model
     seen = features.events_of_tree_containing(recording.events, 202)
     assert {e["pid"] for e in seen} == {200, 201, 202}  # the test's launcher (pid 200) is inside
     assert "SCOPE" in score.__doc__ and "label-free" in score.__doc__
+
+
+# ---- a batch with a session that was decided out ---------------------------------------------
+
+
+def test_sessions_without_labels_stop_the_run_unless_they_are_left_out_on_purpose(export):
+    make_session(export, "s1-first-attempt", attack_recording(), batch=1)
+    (export / "batch-1-labels" / "s1-first-attempt" / "labels.csv").unlink()
+    with pytest.raises(DatasetError, match="no labels"):
+        dataset.load_batch(1, export / "batch-1", export / "batch-1-labels")  # strict by default
+    trees = dataset.load_batch(1, export / "batch-1", export / "batch-1-labels", only_labelled=True)
+    assert "s1-first-attempt" not in {t.row["session_id"] for t in trees}
+    assert dataset.unlabelled_sessions(export / "batch-1", export / "batch-1-labels") == ["s1-first-attempt"]
+
+
+def test_the_report_names_the_sessions_left_out(export):
+    make_session(export, "s1-first-attempt", attack_recording(), batch=1)
+    (export / "batch-1-labels" / "s1-first-attempt" / "labels.csv").unlink()
+    report = train.run(spec(export), None, only_labelled=True)
+    assert report["sessions_left_out_for_having_no_labels"] == {"1": ["s1-first-attempt"]}
+    assert "s1-first-attempt" in train.text_report(report)
+    with pytest.raises(DatasetError):
+        train.run(spec(export), None)
+
+
+def test_three_batches_give_three_folds_each_testing_an_unseen_batch(export):
+    make_session(export, "s3-attack", attack_recording(), batch=3)
+    make_session(export, "s3-benign", benign_recording(), batch=3, malicious=False)
+    make_session(export, "s3-heldout", attack_recording(), batch=3, pool="held-out", technique="T1053.005")
+    three = spec(export) + [(3, export / "batch-3", export / "batch-3-labels")]
+    report = train.run(three, None)
+    assert [(f["train_batches"], f["test_batch"]) for f in report["folds"]] == [([2, 3], 1), ([1, 3], 2), ([1, 2], 3)]
+    for fold in report["folds"]:
+        assert fold["test_batch"] not in fold["train_batches"]
+    held = {f["test_batch"]: f["models"]["snapshots"]["held_out_techniques"].get("positives", 0) for f in report["folds"]}
+    assert held == {1: 0, 2: 1, 3: 1}  # a held-out session is only ever on the test side
