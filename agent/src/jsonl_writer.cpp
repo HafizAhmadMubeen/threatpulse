@@ -165,6 +165,9 @@ std::string JsonlWriter::format(const PendingEvent& event, const ImageInfo& imag
         {"sha256", nullable(image.sha256)},
         {"signed", image.is_signed},
         {"signer", nullable(image.signer)},
+        // Optional in the schema. True only for a verified signature whose chain ends at
+        // a Microsoft root, so a display name alone ("Microsoft") never makes it true.
+        {"microsoft_root", image.is_signed && image.microsoft_root},
     };
     json["target"] = {
         {"path", nullable(event.path)},

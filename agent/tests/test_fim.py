@@ -232,7 +232,7 @@ def test_rotation_never_overwrites(tmp_path):
 
 def test_targets_cover_the_persistence_zone():
     names = {target.name for target in REGISTRY_TARGETS}
-    assert len(names) == 6
+    assert len(names) == 8
     assert "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" in names
     assert "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run" in names
 

@@ -1,0 +1,362 @@
+{
+  "seed": 20261106,
+  "batches": [
+    {
+      "batch": 1,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 1,
+          "test_id": "T1218.011-9"
+        },
+        {
+          "order": 2,
+          "run": 1,
+          "test_id": "benign",
+          "activity": "normal-use"
+        },
+        {
+          "order": 3,
+          "run": 1,
+          "test_id": "T1486-script"
+        },
+        {
+          "order": 4,
+          "run": 1,
+          "test_id": "T1053.005-2"
+        },
+        {
+          "order": 5,
+          "run": 1,
+          "test_id": "T1547.001-2"
+        },
+        {
+          "order": 6,
+          "run": 1,
+          "test_id": "T1547.001-1"
+        },
+        {
+          "order": 7,
+          "run": 1,
+          "test_id": "T1003.001-2"
+        },
+        {
+          "order": 8,
+          "run": 1,
+          "test_id": "T1059.001-17"
+        },
+        {
+          "order": 9,
+          "run": 2,
+          "test_id": "benign",
+          "activity": "admin-powershell"
+        }
+      ]
+    },
+    {
+      "batch": 2,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 2,
+          "test_id": "T1486-script"
+        },
+        {
+          "order": 2,
+          "run": 2,
+          "test_id": "T1218.011-9"
+        },
+        {
+          "order": 3,
+          "run": 2,
+          "test_id": "T1547.001-2"
+        },
+        {
+          "order": 4,
+          "run": 2,
+          "test_id": "T1547.001-1"
+        },
+        {
+          "order": 5,
+          "run": 3,
+          "test_id": "benign",
+          "activity": "zip-files"
+        },
+        {
+          "order": 6,
+          "run": 2,
+          "test_id": "T1053.005-2"
+        },
+        {
+          "order": 7,
+          "run": 4,
+          "test_id": "benign",
+          "activity": "admin-powershell"
+        },
+        {
+          "order": 8,
+          "run": 2,
+          "test_id": "T1059.001-17"
+        },
+        {
+          "order": 9,
+          "run": 2,
+          "test_id": "T1003.001-2"
+        }
+      ]
+    },
+    {
+      "batch": 3,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 3,
+          "test_id": "T1218.011-9"
+        },
+        {
+          "order": 2,
+          "run": 3,
+          "test_id": "T1486-script"
+        },
+        {
+          "order": 3,
+          "run": 3,
+          "test_id": "T1547.001-2"
+        },
+        {
+          "order": 4,
+          "run": 3,
+          "test_id": "T1003.001-2"
+        },
+        {
+          "order": 5,
+          "run": 3,
+          "test_id": "T1053.005-2"
+        },
+        {
+          "order": 6,
+          "run": 5,
+          "test_id": "benign",
+          "activity": "zip-files"
+        },
+        {
+          "order": 7,
+          "run": 3,
+          "test_id": "T1547.001-1"
+        },
+        {
+          "order": 8,
+          "run": 3,
+          "test_id": "T1059.001-17"
+        },
+        {
+          "order": 9,
+          "run": 6,
+          "test_id": "benign",
+          "activity": "install-uninstall"
+        }
+      ]
+    },
+    {
+      "batch": 4,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 4,
+          "test_id": "T1003.001-2"
+        },
+        {
+          "order": 2,
+          "run": 7,
+          "test_id": "benign",
+          "activity": "normal-use"
+        },
+        {
+          "order": 3,
+          "run": 8,
+          "test_id": "benign",
+          "activity": "admin-powershell"
+        },
+        {
+          "order": 4,
+          "run": 4,
+          "test_id": "T1059.001-17"
+        },
+        {
+          "order": 5,
+          "run": 4,
+          "test_id": "T1486-script"
+        },
+        {
+          "order": 6,
+          "run": 4,
+          "test_id": "T1547.001-1"
+        },
+        {
+          "order": 7,
+          "run": 4,
+          "test_id": "T1547.001-2"
+        }
+      ]
+    },
+    {
+      "batch": 5,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 9,
+          "test_id": "benign",
+          "activity": "normal-use"
+        },
+        {
+          "order": 2,
+          "run": 5,
+          "test_id": "T1547.001-2"
+        },
+        {
+          "order": 3,
+          "run": 10,
+          "test_id": "benign",
+          "activity": "zip-files"
+        },
+        {
+          "order": 4,
+          "run": 5,
+          "test_id": "T1003.001-2"
+        },
+        {
+          "order": 5,
+          "run": 5,
+          "test_id": "T1486-script"
+        },
+        {
+          "order": 6,
+          "run": 5,
+          "test_id": "T1059.001-17"
+        },
+        {
+          "order": 7,
+          "run": 5,
+          "test_id": "T1547.001-1"
+        },
+        {
+          "order": 8,
+          "run": 6,
+          "test_id": "T1547.001-2",
+          "extra": true
+        }
+      ]
+    },
+    {
+      "batch": 6,
+      "network": "nat",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 1,
+          "test_id": "T1105-29"
+        },
+        {
+          "order": 2,
+          "run": 2,
+          "test_id": "T1105-29"
+        },
+        {
+          "order": 3,
+          "run": 11,
+          "test_id": "benign",
+          "activity": "install-uninstall"
+        },
+        {
+          "order": 4,
+          "run": 12,
+          "test_id": "benign",
+          "activity": "windows-update"
+        }
+      ]
+    },
+    {
+      "batch": 7,
+      "network": "nat",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 3,
+          "test_id": "T1105-29"
+        },
+        {
+          "order": 2,
+          "run": 4,
+          "test_id": "T1105-29"
+        },
+        {
+          "order": 3,
+          "run": 13,
+          "test_id": "benign",
+          "activity": "install-uninstall"
+        },
+        {
+          "order": 4,
+          "run": 14,
+          "test_id": "benign",
+          "activity": "windows-update"
+        }
+      ]
+    },
+    {
+      "batch": 8,
+      "network": "nat",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 5,
+          "test_id": "T1105-29"
+        },
+        {
+          "order": 2,
+          "run": 15,
+          "test_id": "benign",
+          "activity": "windows-update"
+        }
+      ]
+    },
+    {
+      "batch": 9,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 1,
+          "test_id": "T1685-51"
+        }
+      ]
+    },
+    {
+      "batch": 10,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 2,
+          "test_id": "T1685-51"
+        }
+      ]
+    },
+    {
+      "batch": 11,
+      "network": "host-only",
+      "sessions": [
+        {
+          "order": 1,
+          "run": 3,
+          "test_id": "T1685-51"
+        }
+      ]
+    }
+  ]
+}

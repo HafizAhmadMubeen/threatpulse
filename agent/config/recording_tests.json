@@ -1,0 +1,24 @@
+{
+  "atomic_commit": "edb5039ae07216bf322fdba07b6f686d7c088a03",
+  "tests": [
+    { "id": "T1547.001-1", "technique": "T1547.001", "kind": "atomic", "number": 1, "pool": "training-technique", "runs": 5, "network": "host-only" },
+    { "id": "T1547.001-2", "technique": "T1547.001", "kind": "atomic", "number": 2, "pool": "training-technique", "runs": 5, "extra_runs": 1, "network": "host-only" },
+    { "id": "T1003.001-2", "technique": "T1003.001", "kind": "atomic", "number": 2, "pool": "training-technique", "runs": 5, "network": "host-only" },
+    { "id": "T1059.001-17", "technique": "T1059.001", "kind": "atomic", "number": 17, "pool": "training-technique", "runs": 5, "network": "host-only" },
+    { "id": "T1105-29", "technique": "T1105", "kind": "atomic", "number": 29, "pool": "training-technique", "runs": 5, "network": "nat" },
+    { "id": "T1486-script", "technique": "T1486", "kind": "script", "script": "vm_t1486_script.ps1", "pool": "training-technique", "runs": 5, "network": "host-only" },
+    { "id": "T1053.005-2", "technique": "T1053.005", "kind": "atomic", "number": 2, "pool": "held-out", "runs": 3, "network": "host-only" },
+    { "id": "T1685-51", "technique": "T1685", "kind": "atomic", "number": 51, "pool": "held-out", "runs": 3, "network": "host-only" },
+    { "id": "T1218.011-9", "technique": "T1218.011", "kind": "atomic", "number": 9, "pool": "held-out", "runs": 3, "network": "host-only" }
+  ],
+  "benign": {
+    "sessions": 15,
+    "nat_sessions": 5,
+    "minutes": 10,
+    "activities": ["normal-use", "install-uninstall", "windows-update", "admin-powershell", "zip-files"],
+    "scripted": {
+      "admin-powershell": "vm_benign_admin.ps1",
+      "zip-files": "vm_benign_zip.ps1"
+    }
+  }
+}

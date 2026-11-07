@@ -34,6 +34,7 @@ DOCUMENTED = {
     "FILE_FLAG_OVERLAPPED": 0x40000000,
     "WAIT_OBJECT_0": 0,
     "WAIT_TIMEOUT": 0x102,
+    "ERROR_ALREADY_EXISTS": 183,
 }
 
 
@@ -44,6 +45,7 @@ def test_constant_has_its_documented_value(name, value):
 
 def test_filters_combine_the_expected_flags():
     assert windows_watch.REGISTRY_FILTER == 0x5
+    assert windows_watch.APPEARANCE_FILTER == 0x1
     assert windows_watch.FOLDER_FILTER == 0x19
     assert windows_watch.FOLDER_SHARING == 0x7
     assert windows_watch.FOLDER_FLAGS == 0x42000000

@@ -12,6 +12,7 @@ File Integrity Monitoring for the persistence zone, covering PHASES.md step 2.2.
 |---|---|---|
 | Run and RunOnce keys | HKCU and HKLM | Registry data |
 | Run and RunOnce keys for 32-bit programs | `HKLM\SOFTWARE\WOW6432Node\...` | Registry data |
+| `RunOnceEx`, including its numbered subkeys such as `0001\Depend` | HKLM and `HKLM\SOFTWARE\WOW6432Node\...` | Registry data |
 | Startup folders | Per-user and all-users, files directly in the folder | SHA-256 |
 | Hosts file | `drivers\etc\hosts` only, not the other files in that folder | SHA-256 |
 
@@ -19,7 +20,7 @@ HKCU and the per-user startup folder belong to whoever runs FIM, so always run i
 
 ## Create the baseline
 
-The baseline is the approved state. Create it on a clean system, **before the `atomic-ready` snapshot in step 2.3**, so that every rollback restores it.
+The baseline is the approved state. Create it on a clean system, **before the `atomic-ready-3` snapshot in step 2.3**, so that every rollback restores it.
 
 From `C:\ThreatPulseLab\threatpulse`:
 
@@ -99,7 +100,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File agent\tools\vm_test_fim.ps1
 agent\.venv\Scripts\python agent\tools\check_fim_run.py C:\ThreatPulseLab\logs\fim.jsonl C:\ThreatPulseLab\logs\fim_test_keys.txt --events C:\ThreatPulseLab\logs\events.jsonl
 ```
 
-The script adds a comment line to `hosts`, test values to the Run and RunOnce keys and a dummy file to the startup folder. It undoes everything, even if it fails part-way. A key that doesn't exist yet is skipped.
+The script adds a comment line to `hosts`, test values to the Run, RunOnce and `RunOnceEx` keys and a dummy file to the startup folder. It undoes everything, even if it fails part-way. A Run or RunOnce key that doesn't exist yet is skipped. `RunOnceEx` usually doesn't exist, so the script creates the keys that are missing, which is the case FIM has to cope with, and removes only those.
 
 **To test the 60-second compare,** run `main.py watch --poll-only`, then:
 
@@ -139,6 +140,11 @@ Results of the run with `--poll-only` and `vm_test_fim.ps1 -Quick -HoldSeconds 7
 | A value added and removed before the rescan is missed | Sysmon Event IDs 12 and 13 cover this. FIM counts these under `Notifications with no change`, which also counts writes to other files in the hosts folder |
 | Windows removes RunOnce values itself | After a RunOnce entry runs, it appears as `removed` |
 | An admin attacker can stop FIM or edit its baseline | Accepted for this prototype |
-| A key or folder that doesn't exist can't be watched | FIM prints a warning, and the 60-second compare covers it. It tries to watch it again after each timeout |
+| A key or folder that doesn't exist can't be watched | FIM prints a warning, and the 60-second compare covers it. It tries to watch it again after each timeout and each notification |
+| `RunOnceEx` usually doesn't exist until something creates it | No warning is printed for it. FIM watches the parent `CurrentVersion` key for a subkey being added or deleted, and starts watching `RunOnceEx` as soon as it appears. The rescan that follows reads the new values, so the first value is still reported. This is checked in the VM by `vm_test_fim.ps1`, and not yet by a recording |
+| HKCU's `RunOnceEx` isn't watched | Only the HKLM keys, which are the ones the Atomic test writes |
+| An empty subkey being created is not reported | Only values are items. A subkey that holds no value isn't persistence by itself |
+| A subtree with more than 5000 keys, or deeper than 16 levels, is cut short | An item named `(scan truncated)` is added, so the gap appears as a change instead of as silence |
+| A key that can't be read is reported | An item named `(unreadable)` appears, so a key that is hidden shows up |
 | Only one user's HKCU and startup folder are watched | Other users' autostart entries aren't covered. The lab VM has one user |
 | The Gate 2 "FIM alert" needs more than this | This step gives `fim_change` events. Turning them into an Alert belongs to the detection layer |

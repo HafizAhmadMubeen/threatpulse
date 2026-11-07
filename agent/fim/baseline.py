@@ -10,7 +10,7 @@ import json
 import os
 import shutil
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,8 +18,11 @@ from pathlib import Path
 from targets import FolderTarget
 
 UNREADABLE = "unreadable"  # a locked file is reported, because it could be hiding a change
+TRUNCATED = "scan truncated"
 READ_ATTEMPTS = 3
 READ_RETRY_SECONDS = 0.05
+MAX_TREE_KEYS = 5000
+MAX_TREE_DEPTH = 16
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,50 @@ def encode_registry_data(data: object) -> str:
     if isinstance(data, list):
         return "\n".join(str(entry) for entry in data)
     return str(data)
+
+
+@dataclass(frozen=True)
+class KeyContents:
+    values: tuple[tuple[str, object, int], ...] = ()  # (name, data, registry type)
+    subkeys: tuple[str, ...] = ()
+    unreadable: bool = False
+
+
+def read_key_tree(
+    read_key: Callable[[str], KeyContents | None], name: str, subkey: str, subtree: bool
+) -> Snapshot:
+    """The values of a key, and with `subtree` those of every key below it.
+
+    `read_key(path)` gives one key's contents, or None if it doesn't exist. Items are named
+    <name>\\<subkeys>\\<value>, with (Default) for an unnamed value. A key that can't be
+    read, and a tree that is too big, each add an item that says so. A gap then shows up
+    as a change, not as silence. This has no Windows-only code, so it can be tested in WSL.
+    """
+    items: Snapshot = {}
+    pending = [(subkey, name, 0)]
+    visited = 0
+    while pending:
+        path, shown, depth = pending.pop()
+        contents = read_key(path)
+        if contents is None:
+            continue
+        visited += 1
+        if contents.unreadable:
+            items[f"{shown}\\({UNREADABLE})"] = Item("registry", UNREADABLE)
+            continue
+        for value_name, data, reg_type in contents.values:
+            items[f"{shown}\\{value_name or '(Default)'}"] = Item(
+                "registry", encode_registry_data(data), reg_type
+            )
+        if not subtree:
+            continue
+        if visited >= MAX_TREE_KEYS or depth >= MAX_TREE_DEPTH:
+            if contents.subkeys:
+                items[f"{shown}\\({TRUNCATED})"] = Item("registry", TRUNCATED)
+            continue
+        for child in contents.subkeys:
+            pending.append((f"{path}\\{child}", f"{shown}\\{child}", depth + 1))
+    return items
 
 
 def hash_file(path: str | Path) -> str:

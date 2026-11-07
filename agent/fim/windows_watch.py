@@ -11,7 +11,7 @@ Windows-only imports are guarded, so WSL tests can import this table.
 
 import sys
 
-from baseline import Item, Snapshot, encode_registry_data, scan_folder
+from baseline import KeyContents, Snapshot, read_key_tree, scan_folder
 from targets import FolderTarget, RegistryTarget
 
 if sys.platform == "win32":
@@ -52,8 +52,12 @@ FILE_FLAG_OVERLAPPED = 0x40000000
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 
+# GetLastError value
+ERROR_ALREADY_EXISTS = 183
+
 NOTIFY_ROOTS = {"HKCU": HKEY_CURRENT_USER, "HKLM": HKEY_LOCAL_MACHINE}
 REGISTRY_FILTER = REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET
+APPEARANCE_FILTER = REG_NOTIFY_CHANGE_NAME  # only a subkey being added or deleted matters
 FOLDER_FILTER = (
     FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE
 )
@@ -63,30 +67,47 @@ FOLDER_FLAGS = FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED
 _BUFFER_BYTES = 8192
 
 
-def read_registry(target: RegistryTarget) -> Snapshot:
-    """The values in one key. A missing key is empty, not an error."""
-    items: Snapshot = {}
-    roots = {"HKCU": winreg.HKEY_CURRENT_USER, "HKLM": winreg.HKEY_LOCAL_MACHINE}
+def _read_key(root: int, path: str) -> KeyContents | None:
+    """One key's values and subkey names. None if the key doesn't exist."""
     try:
-        key = winreg.OpenKey(roots[target.root], target.subkey, 0, winreg.KEY_READ | KEY_WOW64_64KEY)
+        key = winreg.OpenKey(root, path, 0, winreg.KEY_READ | KEY_WOW64_64KEY)
     except FileNotFoundError:
-        return items
+        return None
+    except OSError:
+        return KeyContents(unreadable=True)  # reported, so a key that is hidden shows up
     with key:
+        values = []
         index = 0
         while True:
             try:
-                name, data, reg_type = winreg.EnumValue(key, index)
+                values.append(winreg.EnumValue(key, index))  # (name, data, type)
             except OSError:  # no more values
-                return items
-            value_name = name or "(Default)"
-            items[f"{target.name}\\{value_name}"] = Item(
-                "registry", encode_registry_data(data), reg_type
-            )
+                break
             index += 1
+        subkeys = []
+        index = 0
+        while True:
+            try:
+                subkeys.append(winreg.EnumKey(key, index))
+            except OSError:  # no more subkeys
+                break
+            index += 1
+    return KeyContents(tuple(values), tuple(subkeys))
+
+
+def read_registry(target: RegistryTarget) -> Snapshot:
+    """The values in one key, and below it for a subtree target. A missing key is empty."""
+    roots = {"HKCU": winreg.HKEY_CURRENT_USER, "HKLM": winreg.HKEY_LOCAL_MACHINE}
+    root = roots[target.root]
+    return read_key_tree(
+        lambda path: _read_key(root, path), target.name, target.subkey, target.subtree
+    )
 
 
 class _RegistryWatch:
-    def __init__(self, target: RegistryTarget):
+    def __init__(self, target: RegistryTarget, subtree: bool, flags: int):
+        self._subtree = subtree
+        self._flags = flags
         self._key = win32api.RegOpenKeyEx(
             NOTIFY_ROOTS[target.root], target.subkey, 0, KEY_NOTIFY | KEY_WOW64_64KEY
         )
@@ -94,7 +115,7 @@ class _RegistryWatch:
         self.rearm()
 
     def rearm(self) -> None:
-        win32api.RegNotifyChangeKeyValue(self._key, False, REGISTRY_FILTER, self.event, True)
+        win32api.RegNotifyChangeKeyValue(self._key, self._subtree, self._flags, self.event, True)
 
 
 class _FolderWatch:
@@ -125,9 +146,11 @@ class WindowsSource:
         folders: tuple[FolderTarget, ...],
         stop_event,
         poll_only: bool,
+        appearance: tuple[RegistryTarget, ...] = (),
     ):
         self._registry = registry
         self._folders = folders
+        self._appearance = appearance
         self._stop_event = stop_event
         self._poll_only = poll_only
         self._watches: dict[object, object] = {}  # target -> open watch
@@ -135,23 +158,35 @@ class WindowsSource:
         self._open_missing_watches()
 
     def _open_missing_watches(self) -> None:
-        """A target that can't be watched yet is still covered by the 60-second compare."""
+        """A target that can't be watched yet is still covered by the 60-second compare.
+
+        Called again after every notification, so a key that has just appeared, such as
+        RunOnceEx, is watched before the rescan that follows. The scan reads it anyway.
+        """
         if self._poll_only:
             return
-        openers = [(target, _RegistryWatch) for target in self._registry]
-        openers += [(target, _FolderWatch) for target in self._folders]
-        for target, opener in openers:
+        openers = [
+            (target, lambda t=target: _RegistryWatch(t, t.subtree, REGISTRY_FILTER))
+            for target in self._registry
+        ]
+        openers += [
+            (target, lambda t=target: _RegistryWatch(t, False, APPEARANCE_FILTER))
+            for target in self._appearance
+        ]
+        openers += [(target, lambda t=target: _FolderWatch(t)) for target in self._folders]
+        for target, open_watch in openers:
             if target in self._watches:
                 continue
             try:
-                self._watches[target] = opener(target)
+                self._watches[target] = open_watch()
                 self._reported.discard(target)
             except pywintypes.error as error:
-                if target not in self._reported:
-                    self._reported.add(target)
-                    label = target.name if isinstance(target, RegistryTarget) else target.path
-                    print(f"Not watching {label}: {error.strerror}")
-                    print("The 60-second compare still covers it.")
+                if getattr(target, "optional", False) or target in self._reported:
+                    continue
+                self._reported.add(target)
+                label = target.name if isinstance(target, RegistryTarget) else target.path
+                print(f"Not watching {label}: {error.strerror}")
+                print("The 60-second compare still covers it.")
 
     def scan(self) -> Snapshot:
         items: Snapshot = {}
@@ -185,4 +220,6 @@ class WindowsSource:
             event = self._watches[target].event
             if win32event.WaitForSingleObject(event, 0) == WAIT_OBJECT_0:
                 self._rearm(target)
+        # Before the rescan, so that a change in a key that just appeared is not missed.
+        self._open_missing_watches()
         return True

@@ -61,7 +61,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 2. Download the **Windows 11 Enterprise Evaluation** ISO (free from the Microsoft Evaluation Center). The evaluation runs **90 days**. After that, the VM is rebuilt from the ISO using the setup guide.
 3. VM size: **6 GB RAM, 4 CPU cores, 80 GB dynamic disk.** Store the VM and ISO on the drive with the most free space (not C: if C: is nearly full).
 4. Install inside the VM: Sysmon with the **`sysmon-modular`** config (see Section 4.2), Python 3.12, Git, and later Atomic Red Team.
-5. **Take a snapshot called `clean-baseline`.** Roll back to it after every attack simulation.
+5. **Take a snapshot called `clean-baseline`.** Roll back to a snapshot after every attack simulation, except recording batches, which roll back after each batch (Section 10).
 
 **If WSL2 is installed on the host:** VMware and VirtualBox both run alongside it, so don't turn any Windows features on or off for this project. Run `wsl --shutdown` before heavy VM testing to free RAM.
 
@@ -72,11 +72,11 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 - **Export procedure (how logs leave the VM):**
   1. Stop the agent and all test processes.
   2. Enable a shared folder named `vm-export`.
-  3. Copy **only** `.jsonl` / `.csv` log files into it.
+  3. Copy **only** `.jsonl` and `.csv` log files, `session.json`, and the agent and FIM summary `.txt` files into it.
   4. Disable the shared folder.
-  5. Roll back the snapshot.
+  5. Roll back the snapshot. For recordings, this export and rollback happen once per batch.
 
-  Never copy executables, scripts or archives out of the VM.
+  Never copy executables, scripts, archives or memory dumps out of the VM.
 - **EICAR:** the repo stores only its hash and YARA rule, never the file itself. Create the EICAR file only inside the VM. On the host, use a harmless test-marker file instead (a plain text file containing `THREATPULSE-TEST-MARKER`). Never add Defender exclusions on the host.
 - Defender inside the VM may block some Atomic tests. An exclusion for the Atomic folder **inside the VM** is fine.
 - **Credentials inside the VM are low-privilege only:** a read-only Git token or deploy key, and a free-tier LLM API key used only for this project.
@@ -125,11 +125,16 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 **Which Sysmon config:**
 - We use **`sysmon-modular`** (Olaf Hartong), which includes ProcessAccess rules for LSASS.
 - The popular SwiftOnSecurity config leaves ProcessAccess logging essentially disabled by default, which would make the LSASS zone blind.
-- Whatever config is used, **Gate 2 checks that Event ID 10 events targeting `lsass.exe` actually appear** (with Atomic T1003.001).
+- Whatever config is used, **Gate 2 records what Atomic T1003.001 produces.** With LSA protection on, no Event ID 10 targeting `lsass.exe` appeared (Section 4.3).
 
 ### 4.3 Limits we accept and will state openly
 
 - User-mode detection is **detect-then-contain**, not prevention. For example, Sysmon reports LSASS access *after* the handle is opened, so suspending the process may come after part of the memory is read.
+- **With LSA protection on, the sensor recorded no LSASS access (accepted limitation).** Microsoft's LSA protection stops non-protected processes from reading LSASS memory, and the VM has it on (`RunAsPPL` is `0x2`). In step 2.3, Atomic T1003.001 test #2 failed with `Access is denied`. The agent recorded 5998 events, 0 invalid, with no `process_access` event targeting `lsass.exe`, while `process_access` decoding worked on other targets, including `vm_read`. So Windows blocked the dump, and our sensor did not see the attempt. LSA protection and Defender are never disabled to change this result.
+- **What the sensors see of a credential dump under LSA protection.** In the four recorded T1003.001 sessions (Atomic test #2), the test part holds 2 events each, PowerShell's start and stop, and no session has a `process_access` event on `lsass.exe`. Sysmon Event ID 10 only helps where the access is actually visible, and with LSA protection on it is not. So the sensors see little of a credential-dump attempt, and what they do see is the command line.
+- **The command-line rule is the layer that still fires.** `R-T1003-002` matches a dump command line (the `comsvcs.dll` MiniDump export, a dump tool pointed at lsass, or `sekurlsa::`) and fires even when Windows denies the read. Replayed over the 4 recorded sessions it fires in 3. In the fourth the command line was not captured (null), and the rule cannot fire without it. It is a string match, so a variant that avoids those strings, such as calling the export by ordinal, is not caught.
+- **No automatic containment for this technique under LSA protection.** Policy rule P1 matches only `process_access` events, so an `R-T1003-002` alert gets the default decision, `alert_only`, whatever its risk score.
+- **Evaluation.** T1003.001 is reported as a documented limitation, not as a model success or failure (Section 8.1).
 - Persistence protection is **detect-and-revert**, not block. The process that wrote the key has often already exited, so there may be nothing left to suspend.
 - Our own ransomware detector suspends after a burst of encryptions, so a few files may be lost first. We measure this ("files lost before containment") as a metric, as ShieldFS-style evaluations do.
 
@@ -353,6 +358,7 @@ default: [alert_only]
 Instead we protect the **object**, which is classic integrity checking:
 - Every change that isn't approved is restored.
 - When a legitimate installer adds a Run key, the change appears on the dashboard, the analyst approves it, the baseline updates, and the restored change is re-applied.
+- Restore acts only on a change that still differs from the baseline after a short debounce (about 2 seconds), so a harmless rewrite such as Edge's Run value is logged but not fought over.
 - Suspension depends on the **risk score** of the process tree, and is skipped if those processes have already exited.
 
 **Why LSASS uses an allowlist and starts in learning mode.**
@@ -396,12 +402,13 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
   - **Benign:** normal use plus "noisy" normal activity (installing/uninstalling software, Windows Update, admin PowerShell, zipping files)
   - **Malicious:** Atomic Red Team tests from the agreed list, plus our own T1486 script
 - Labelling: the recording script launches each test and records its start/end time and PID. Events from that process tree are labelled malicious. Our T1486 script is launched the same way, so the same labelling works.
+- Limit of tree labelling: T1053.005's task runs under the Task Scheduler service, outside the launcher's tree, so only the part that creates the task is labelled. This affects evaluation of that held-out technique and is stated in the results.
 - Logs leave the VM through the export procedure (Section 3.2) **before** each rollback
 
 **Gate 2**
 - [ ] The agreed number of benign sessions and every non-held-out technique recorded and exported to the host
 - [ ] Modifying the hosts file in the VM triggers a FIM alert
-- [ ] Running Atomic T1003.001 in the VM produces a `process_access` event on LSASS with `vm_read`
+- [x] **Accepted limitation (Section 4.3):** with LSA protection on, Atomic T1003.001 is denied by Windows and produces no `process_access` event on LSASS. `process_access` decoding, including `vm_read`, is proven on other targets. T1003.001 is reported as a documented limitation (Section 8.1)
 - [ ] Each behaviour rule fires on its Atomic test and **not** on the benign sessions (or the false positives are documented)
 - [ ] A retrieval query like "process reads LSASS memory" returns T1003.001 in the top results
 
@@ -445,7 +452,7 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
 | 3 | LLM can be manipulated by text in telemetry | LLM has no tools and no enforcement role. Telemetry is delimited data in the user role. Policy code never reads LLM output. Live injection demo | Greshake et al. 2023; Willison 2025 (lethal trifecta) |
 | 4 | LLM may invent technique IDs | RAG over official ATT&CK data and an ID validator after generation | Lewis et al. 2020 |
 | 5 | Ransomware zone depends on Defender's Controlled Folder Access | Own detector: many files rewritten in a short time with high output entropy → suspend. CFA is an extra layer, not a requirement | Scaife et al. 2016; Kharraz et al. 2016; Continella et al. 2016 |
-| 6 | No kernel driver, so LSASS access is hard to see | Sysmon Event ID 10 (`sysmon-modular`), access-mask check, allowlist built in learning mode | Section 4.2 |
+| 6 | No kernel driver, so LSASS access is hard to see | Sysmon Event ID 10 (`sysmon-modular`), access-mask check, allowlist built in learning mode. With LSA protection on no access is recorded, and the command-line rule `R-T1003-002` is what still fires, where the command line is captured | Sections 4.2 and 4.3 |
 | 7 | Persistence written by signed tools (`reg.exe`) looks "trusted" | Protect the object: restore every unapproved change, analyst approves legitimate ones | Integrity checking (2nd gen); Section 5.6 |
 | 8 | Access control needs a formal model | Policy written as subject/object/environment attributes in a YAML file. Every decision logs the rules and attributes used | NIST SP 800-162 |
 | 9 | Enforcement could crash the VM or touch the host | Never-suspend list (path + signature), VM guard marker file, undo for every action | Section 3.3, 5.6 |
@@ -455,21 +462,25 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
 
 ### 8.1 Test techniques (agree in Phase 0)
 
-Proposed list. **Before finalising, confirm each Atomic technique has a Windows test in the Atomic Red Team repository.**
+Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `edb5039` and ATT&CK 20.1. Test numbers apply to that commit, because they can shift between commits.
 
 | Technique | Name | Zone / layer | Test material | Train or held-out |
 |---|---|---|---|---|
-| T1547.001 | Registry Run Keys / Startup Folder | Persistence | Atomic | Train |
-| T1003.001 | OS Credential Dumping: LSASS Memory | LSASS | Atomic | Train |
-| T1059.001 | PowerShell | Behaviour | Atomic | Train |
-| T1105 | Ingress Tool Transfer | Network | Atomic | Train |
+| T1547.001 | Registry Run Keys / Startup Folder | Persistence | Atomic #1 Reg Key Run, #2 Reg Key RunOnce (writes `RunOnceEx\0001\Depend`, so the rule and FIM must cover RunOnceEx) | Train |
+| T1003.001 | OS Credential Dumping: LSASS Memory | LSASS | Atomic #2 comsvcs.dll | Train. Reported as a documented limitation (see below) |
+| T1059.001 | PowerShell | Behaviour | Atomic #17 PowerShell Command Execution | Train |
+| T1105 | Ingress Tool Transfer | Network | Atomic #29 `iwr` download. Needs NAT | Train |
 | T1486 | Data Encrypted for Impact | Documents | **Our own** harmless script, encrypting copies of dummy files in a test folder | Train |
-| T1053.005 | Scheduled Task | Behaviour / persistence | Atomic | **Held-out** |
-| T1562.001 | Impair Defenses: Disable or Modify Tools | Behaviour | Atomic | **Held-out** |
-| T1218.011 | System Binary Proxy Execution: Rundll32 | Behaviour | Atomic | **Held-out** |
+| T1053.005 | Scheduled Task | Behaviour / persistence | Atomic #2 Scheduled task Local | **Held-out** |
+| T1685 | Disable or Modify Tools | Behaviour | Atomic #51 Tamper with Windows Defender Registry - Reg.exe | **Held-out** |
+| T1218.011 | System Binary Proxy Execution: Rundll32 | Behaviour | Atomic #9 Launches an executable using Rundll32 and pcwutl.dll | **Held-out** |
 | (manual) | Hosts file modification | FIM | Manual edit in VM | FIM test only |
 | (EICAR) | Standard antivirus test file | Signatures | EICAR, VM only | Signature test only |
 | (UPX) | Packed harmless program | Heuristics | UPX (open-source packer), VM only | Heuristic test only |
+
+- **T1685 replaces T1562.001, and stays held-out.** The source is the `revoked-by` relationship from T1562.001 to T1685 in the ATT&CK 20.1 STIX data. Atomic Red Team moved its tests to T1685 in its ATT&CK v19 migration.
+- **Never run T1685 tests #14 or #15.** They unload and uninstall Sysmon, which would blind our own sensors.
+- **T1003.001 is reported as a documented limitation, not as a model success or failure.** With LSA protection on, Windows denies the dump and the sensors record no access to LSASS (Section 4.3). In every recorded session the test part is 2 events, PowerShell's start and stop, so there is no behaviour for the model to learn or miss, and the only layer that fires is the command-line rule `R-T1003-002`, in 3 of 4 sessions. The evaluation table lists T1003.001 separately, with this explanation, and says which layer caught it and in how many sessions.
 
 ### 8.2 Protected-zone demos
 
@@ -477,7 +488,7 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 |---|---|---|
 | Documents | Our harmless script "encrypts" copies of dummy text files | Process suspended. Files lost before containment counted |
 | Persistence | Atomic T1547.001 adds a Run key | Key restored from baseline. Alert raised. Origin process suspended only if still running and high-risk |
-| LSASS | Atomic T1003.001 test (lsass_mode = enforcing) | Accessing process suspended, alert with T1003.001 |
+| LSASS | Atomic T1003.001 test (lsass_mode = enforcing) | Accessing process suspended, alert with T1003.001. Not reachable with LSA protection on: no access event is recorded (Sections 4.3 and 9) |
 | Network | Harmless script repeatedly requests a test URL after a high risk score | Firewall rule blocks the program's outbound traffic |
 
 ### 8.3 Metrics
@@ -505,7 +516,14 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | VM evaluation licence expires (90 days) | Rebuild from the ISO. Keep setup steps scripted in `docs/lab-setup.md` |
 | A member falls behind | See "Rebalancing" in ROADMAP.md. Simplify a layer, never remove it |
 | The backend API has no authentication, so any process in the VM could approve its own change | Must be solved before step 4.6 |
-| `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Verify with Atomic T1003.001 in step 2.3 | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM |
+| `sysmon-modular` may not log some LSASS access masks (e.g. `0x1410` without an `UNKNOWN` call trace). Step 2.3 couldn't settle this, because LSA protection denied the access | A project-specific Sysmon config (`agent/config/sysmon-threatpulse.xml`) that adds a ProcessAccess include rule for TargetImage `lsass.exe`, kept in the repo and installed in the VM. Untested |
+| With LSA protection on, rule P1 has no `process_access` event on LSASS to match, so it can't fire | Open. Decide before step 3.1. Until then, P1 is unproven in the VM. In the four recorded T1003.001 sessions the `R-T1003-002` alert, which has event type `process_start`, gets `alert_only` (Section 4.3) |
+| The LSASS demo in Section 8.2 ("Accessing process suspended") and step 4.5 can't run as written, and success criterion 2 in Section 1 expects all four zones in a live demo | Open. Decide the LSASS demo before step 4.5 |
+| T1003.001 is a training technique, but its LSASS-access feature will be empty, and the step 3.3 allowlist may have little to learn from | Open. Track B shouldn't rely on that feature for T1003.001. Checked on the four recorded sessions: the test part is 2 events (PowerShell's start and stop), so `process_start` gives no usable behaviour signal either. T1003.001 is reported as a documented limitation (Sections 4.3 and 8.1) |
+| In batch 1, 64% to 98% of the malicious events in the six Atomic sessions come from the `Invoke-AtomicTest` wrapper, which benign sessions never run. The three held-out techniques share it with the training techniques, so a model could learn the wrapper instead of behaviour, and held-out results would look better than they are (Arp et al. 2022). T1486 has no wrapper | Decided (Section 10, "Label parts"): each event has a `part`, and Track B trains and evaluates on the test part only. Batch 1 labels were re-derived from the exported logs, with no new recording (now `batch-01-labels-v3`, which also marks the cleanup process as harness) |
+| FIM doesn't watch `RunOnceEx`, and Atomic T1547.001 #2 writes there. ETW and Sysmon saw it, FIM didn't | Decided (Section 10, "FIM and RunOnceEx"): FIM now watches it as a subtree, which needs the new snapshot `atomic-ready-3`. T1547.001 #2 run 1 is recorded again as an extra run |
+| Benign sessions contain legitimate `fim_change` events: in batch 1, Edge removed and re-added its `MicrosoftEdgeAutoLaunch_*` Run value 140 ms apart. A rule on `fim_change` would fire, and a restore could race with Edge | Decided (Section 10, "FIM restore debounce"): FIM keeps logging every change, and the Phase 3 restore waits about 2 seconds. Still a Gate 2 false positive for any rule that fires on `fim_change` alone |
+| The agent's path coverage for processes started after it was under 95% in all 9 batch 1 sessions (68.8% to 94.5%), and the attack processes had 2 or 3 pathless writes each, which misses the 100% target. The sessions start right after a revert, when Windows background work is highest. The pathless writes are PowerShell's jump-list writes, not in a protected zone | Decided (Section 10, "Warm-up and path coverage"): a 60-second warm-up from batch 2, and the jump-list writes are accepted. Batch 2 showed the warm-up does not raise coverage (91% to 94% in the attack sessions in both batches), so it is kept only for consistency |
 
 ## 10. Decisions
 
@@ -518,10 +536,22 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Agent → pipeline | JSONL file |
 | FIM location | Python module in the agent track, running in the VM |
 | FIM trigger | Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup |
+| Recording plan | 5 runs per training test: T1547.001 #1 and #2, T1003.001 #2, T1059.001 #17, T1105 #29 and the T1486 dummy-file script, 30 in total. 3 runs per held-out test: T1053.005 #2, T1685 #51 and T1218.011 #9, 9 in total. 15 benign sessions of about 10 minutes, mixing normal use, install/uninstall, Windows Update, admin PowerShell and zipping files. One extra run of T1547.001 #2 (run 6, after FIM began watching RunOnceEx), so 55 sessions in all |
+| Recording batches | The 55 sessions run in 11 batches, listed with a fixed random order in `agent/tools/batch_plan.json`. Each batch boots from `atomic-ready-3` (batch 3 from `atomic-ready-3.1`, batches 4 to 11 from `atomic-ready-3.2`: see "Batch 3 and snapshots"), mixes benign and attack sessions, and ends with one export and a rollback. Each session starts only if FIM reports no change from the baseline. T1685 #51 gets its own batch every time, because it tampers with Defender's settings, which FIM can't see. The extra run is the last session of batch 5, appended after the random order was fixed, so no recorded session moved |
+| Dataset fields | `session.json` records `pool` (`training-technique`, `held-out` or `unassigned`), `batch`, `order`, `warmup_seconds`, and from batch 3 `warmup_end_utc` and `cleanup_root_pid`. `pool` is not the train/test split, which is made later by session, and may keep whole batches together because sessions from one boot share state. From batch 2 the file has no byte order mark. Batch 1 has one and no `warmup_seconds`, which counts as 0. `agent_commit` is the repository commit on the VM when the session was recorded, not the build of the agent binary (see "Agent build for the dataset"). Sessions per batch come from `batch_plan.json`, and only an unscripted benign activity pauses for a person: batch 2 had 9 sessions and no pause |
+| Label parts | `labels.csv` has a `part` column. `test` is the test's own processes: for an Atomic test, the process the `Invoke-AtomicTest` wrapper starts to run it and everything below it, and for our T1486 script the whole tree. `harness` is the wrapper itself (the root PowerShell and its `hostname`, `whoami` and `conhost` helpers) and the whole cleanup process tree, the `-Cleanup` run that `record_session.ps1` starts after the test for every test. The cleanup of our T1486 script deletes the same 25 files the test just encrypted, so it looks exactly like the attack, and the Atomic cleanups undo the test's changes. The cleanup tree is found by its recorded pid from batch 3 on, and in earlier batches by its parent, image, start after `end_utc` and `-Cleanup` flag `background` is everything else, including every event in a benign session. `label` stays the tree label, so the wrapper's and the cleanup's events are `malicious` there, and only `part` tells them apart. **Track B computes all features, including tree shape, from the test part only, and leaves the harness part out of training and evaluation.** Every Atomic session runs the wrapper and no benign session does, so a model that sees it learns the wrapper (Arp et al. 2022). The test part of T1003.001 is about 2 events, and the split depends on what the wrapper starts, so it needs a recheck if Atomic Red Team or the wrapper is updated |
+| FIM and RunOnceEx | FIM watches `RunOnceEx` under HKLM and HKLM `WOW6432Node` as a subtree, because its values sit in numbered subkeys. The key doesn't exist until something creates it, so FIM also watches the parent `CurrentVersion` key for a subkey appearing, and starts watching it at once. HKCU's `RunOnceEx` isn't watched. **The behaviour rule for T1547.001 must cover `Run`, `RunOnce` and `RunOnceEx`** |
+| FIM restore debounce | FIM keeps logging every change. The Phase 3 P2 restore acts only on a change that still differs from the baseline after a short debounce, about 2 seconds. A short add and remove pair, such as Edge rewriting its Run value, stays visible through Sysmon and the behaviour rules, and no restore races with it |
+| Warm-up and path coverage | From batch 2, each session waits 60 seconds after the sensors start, and records `warmup_seconds` (and from batch 3 `warmup_end_utc`). The warm-up stays for batches 2 to 11 for consistency, and batch 1 stays as real data with `warmup_seconds` 0, and the difference doesn't depend on the label. **Track B computes features from `start_utc`, the test start, so bursts during the warm-up are not counted.** Batch 2 had one such burst in two attack sessions: `WmiApSrv.exe` wrote about 4,310 files in under a second, 30 to 60 seconds before the test, and batch 1's first benign session had the same burst. Batch 2 also showed that the warm-up does not raise path coverage: the gaps come from Windows tasks that start at any time (`taskhostw.exe`, `msedgewebview2.exe`, `MoUsoCoreWorker.exe`) The 2 or 3 pathless writes each attack process makes are PowerShell's jump-list writes about 0.3 seconds after it starts, outside every protected zone, and are accepted |
+| Agent build for the dataset | All 11 batches are recorded with the agent binary built before `process.microsoft_root` was added to `jsonl_writer.cpp`, so the whole dataset comes from one build. The VM gets later script changes by `git pull` only, with no rebuild. Rebuilding and taking `atomic-ready-4` happen later, for Phase 4 integration, after Lane 2's schema change that allows `process.microsoft_root` is merged. Until then the schema forbids the field, so the rebuilt agent's output would not validate. Recorded sessions have no `microsoft_root`, because it is optional |
+| Network mode in the dataset | About 5 of the 15 benign sessions are recorded with NAT on, so network mode doesn't correlate with the label (spurious correlation, Arp et al. 2022). Each session records its network mode in `session.json` |
+| Batch 3 and snapshots | Batch 3 booted from `atomic-ready-3.1`, whose VMware network adapter was on NAT. The recorder confirmed host-only for every session, and no session has a `network_connect` event. `atomic-ready-3.2` is `atomic-ready-3.1` with only the network adapter changed to host-only (same FIM baseline, scripts and installers), and batches 4 to 11 boot from it. The export `batch-03` holds two runs from one boot: an interrupted first attempt (6 folders, `20261106T1729` to `T1739`, whose `benign-run5` has no `session.json`) and a complete second run (9 sessions, `20261106T1909` to `T1935`). **Only the second run is dataset,** and the first attempt is excluded as a whole, because it repeats the same five tests under the same run number. The second run is not a fresh boot: it started 100 minutes after the first attempt did, five of its tests had already run once in that boot, and its background activity is higher than in batches 1 and 2. Its test parts match those of batches 1 and 2, so it is kept, and Track B keeps batch 3 together when splitting. `benign-run6` (install-uninstall) ends 14 seconds into its second PuTTY install, so its tail is an unfinished install. The list of valid sessions and their labels are in `batch-03-labels/` next to the export, and the export itself is never modified |
+| Labels | A separate `labels.csv` keyed by `event_id`, because the Event schema allows no extra fields |
+| Sensor stop | `start_lab_sensors.ps1` stops the agent and FIM through named Windows events, the same clean stop as Ctrl+C. It never kills them |
 | FIM approval | Approving a `fim_change` updates the baseline **and** re-applies the approved change. The restore action first saves what it is about to undo in `C:\ThreatPulseLab\fim\quarantine\`, and approval puts that back. Registry: the full value and its type (`reg_type`). Files: a copy of the changed file. `target.change.new_value` is for display only, because it is cut to 1024 characters and has no type. Implemented in Phase 3 (`policy/` restore, `agent/fim` baseline update) |
 | API | Approve and reject take the body `{"reviewed_by", "action"}`, per action. New `GET /fim/changes`. API response schemas live in `contracts/schemas/api/` |
 | FIM output | Its own `fim.jsonl`, not `events.jsonl`, because the agent holds that file without write sharing and FIM must keep working when the agent stops |
-| FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready` snapshot |
+| FIM baseline | Kept in `C:\ThreatPulseLab\fim`, with a copy of each watched file for Phase 3 to restore from. Created before the `atomic-ready-3` snapshot |
 | Path coverage targets | 100% for the test or attack process and the documents zone (met: 127 of 127). At least 95% for all processes started after the agent (met: 97.9%). The remaining 3 writes are accepted |
 | Event sources for ML | Counts and rates use `source: etw` only, so one action is never counted twice. Sysmon events give zone signals, which may be used as features: LSASS access (ID 10), network (ID 3), registry writer and full key (IDs 12 and 13). Detection rules may use either source |
 | Ransomware zone | Controlled Folder Access **and** own detector |
@@ -541,7 +571,6 @@ Proposed list. **Before finalising, confirm each Atomic technique has a Windows 
 | Free-tier provider | Groq / Google Gemini / other | Test both with a sample report, pick on quality and rate limits |
 | Vector DB | ChromaDB / FAISS | ChromaDB (simpler, stores documents with metadata) |
 | Track B and C owners | Haider Shahid / Ahmed Muaz | Assigned within the team |
-| Number of benign sessions | — | Agree in Phase 0 |
 
 ## 11. References
 

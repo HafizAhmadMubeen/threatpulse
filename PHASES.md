@@ -93,18 +93,46 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 
 | Step | Owner | What to do | Check |
 |---|---|---|---|
-| 2.1 | A | Add network events, and read Sysmon Event IDs 3, 10, 12 and 13 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read`. Event IDs 12 and 13 give full registry paths where ETW can't name a key | LSASS access shows as a `process_access` event with decoded rights. A Run key write shows as a `registry_set` event with `source: sysmon` and the full key |
-| 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce keys, startup folders and the hosts file, created before the `atomic-ready` snapshot. Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup. Changes emit `fim_change` events to `fim.jsonl` | Editing the hosts file produces a `fim_change` event |
-| 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`). Take snapshot **`atomic-ready`** | `Invoke-AtomicTest T1547.001 -ShowDetails` works |
-| 2.4 | A | Recording script: start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script: events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo | One labelled log file per test |
-| 2.5 | A | Record benign sessions, including "noisy" normal activity: install/uninstall software, Windows Update, admin PowerShell, zipping files | Agreed number of benign sessions recorded |
-| 2.6 | A | After **each** recording: export procedure (stop everything → enable `vm-export` → copy only `.jsonl`/`.csv` → disable → roll back to `atomic-ready`) | Logs present on the host. VM back to snapshot |
-| 2.7 | B | Behaviour rules in Sigma-style YAML for each test technique, plus `match_rules` | Each rule fires on its sample event |
-| 2.8 | B | Feature extraction per process (counts, rates, zones touched, LSASS access, child processes, signed or not). **No names, paths or command text as features.** Develop on samples or public pre-recorded data until A's dataset arrives | Features computed on samples without errors |
+| 2.1 | A | Add network events, and read Sysmon Event IDs 3, 10, 12 and 13 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read`. Event IDs 12 and 13 give full registry paths where ETW can't name a key | A `process_access` event shows decoded rights such as `vm_read`. LSASS itself is an accepted limitation with LSA protection on (PLANNING.md 4.3). A Run key write shows as a `registry_set` event with `source: sysmon` and the full key |
+| 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce/RunOnceEx keys (RunOnceEx as a subtree, watched through its parent until it exists), startup folders and the hosts file, created before the `atomic-ready-3` snapshot. Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup. Changes emit `fim_change` events to `fim.jsonl` | Editing the hosts file produces a `fim_change` event |
+| 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`), pinned as in "Step 2.3 order of work" below. Take snapshot **`atomic-ready-3`**. Then run Atomic T1003.001 and record the LSASS result | `Invoke-AtomicTest T1547.001 -ShowDetails` works. The T1003.001 result is recorded in PLANNING.md 4.3 |
+| 2.4 | A | Recording script (`record_session.ps1`): start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script (`label_session.py`): events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo. `run_batch.ps1 -Batch N` runs one batch from `batch_plan.json`. Run 5 times per training test and 3 times per held-out test, plus one extra T1547.001 #2 run (PLANNING.md Section 10). Each session waits 60 seconds after the sensors start. `label_session.py` also writes a `part` column (`test`, `harness` or `background`); the wrapper and the cleanup process tree are `harness`. `session.json` also records `warmup_end_utc` and `cleanup_root_pid` | One labelled log file per test |
+| 2.5 | A | Record 15 benign sessions of about 10 minutes, including "noisy" normal activity: normal use, install/uninstall software, Windows Update, admin PowerShell, zipping files. Record about 5 of them with NAT on, so network mode doesn't correlate with the label (spurious correlation, Arp et al. 2022) | 15 benign sessions recorded, with network mode in each `session.json` |
+| 2.6 | A | After **each** batch: export procedure (stop everything → enable `vm-export` → copy only `.jsonl`/`.csv`, `session.json` and the summary `.txt` files → disable → roll back to `atomic-ready-3`) | Logs present on the host. VM back to snapshot |
+| 2.7 | B | Behaviour rules in Sigma-style YAML for each test technique, plus `match_rules`. The T1547.001 rule must cover `Run`, `RunOnce` and `RunOnceEx` | Each rule fires on its sample event |
+| 2.8 | B | Feature extraction per process (counts, rates, zones touched, LSASS access, child processes, signed or not). **No names, paths or command text as features.** Compute all features, including tree shape, from the `test` part of `labels.csv` only, and leave the `harness` part out of training and evaluation (PLANNING.md Section 10, "Label parts"). Develop on samples or public pre-recorded data until A's dataset arrives | Features computed on samples without errors |
 | 2.9 | B | Train the static model on EMBER's ready-made feature vectors (data stored on the large drive, not in the repo) | Accuracy reported on EMBER's test set |
 | 2.10 | C | Download ATT&CK STIX data (`enterprise-attack.json`), split into one document per technique, embed into ChromaDB | Number of techniques loaded matches the file |
 | 2.11 | C | Retrieval tests with plain-language queries | "process reads LSASS memory" → T1003.001 in top results |
 | 2.12 | C | Dashboard pages for decisions, reports and FIM change approval, using sample data | Pages render |
+
+### Step 2.3 order of work
+
+Everything here happens inside the VM, and a person runs every Atomic test. Use 64-bit PowerShell, opened as administrator.
+
+1. Finish the open checks in `agent/README.md`, with NAT on.
+2. Add the Defender exclusion before downloading anything, otherwise Defender may quarantine files during the install. It belongs to `atomic-ready-3` only, not `clean-baseline`:
+   ```powershell
+   Add-MpPreference -ExclusionPath 'C:\AtomicRedTeam'
+   ```
+3. Install pinned versions, because the tests behind a recorded dataset must not change:
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+   Install-Module -Name powershell-yaml -Scope CurrentUser -Force
+   git clone --depth 1 --branch v2.3.0 https://github.com/redcanaryco/invoke-atomicredteam.git C:\AtomicRedTeam\invoke-atomicredteam
+   git clone --filter=blob:none --no-checkout https://github.com/redcanaryco/atomic-red-team.git C:\AtomicRedTeam\atomic-red-team
+   git -C C:\AtomicRedTeam\atomic-red-team checkout edb5039ae07216bf322fdba07b6f686d7c088a03
+   New-Item -ItemType Junction -Path C:\AtomicRedTeam\atomics -Target C:\AtomicRedTeam\atomic-red-team\atomics
+   Import-Module C:\AtomicRedTeam\invoke-atomicredteam\Invoke-AtomicRedTeam.psd1 -Force
+   ```
+4. Check the install: `Invoke-AtomicTest T1547.001 -ShowDetails` must work.
+5. With NAT still on, run `Invoke-AtomicTest <technique> -TestNumbers <numbers> -GetPrereqs` for each test in PLANNING.md 8.1.
+6. Confirm the FIM baseline: run `main.py watch` briefly and expect `Changes reported: 0`. If Windows changed something legitimate, deliberately replace the baseline now.
+7. Shut down, set the network to host-only, and take snapshot **`atomic-ready-3`**. It now holds the baseline, the tools, the installers in `C:\ThreatPulseLab\installers`, and the current FIM and recording scripts. Take it again after any change to those, and `agent_commit` in each `session.json` says which version recorded the session.
+8. Record the LSASS result from the snapshot, with the agent running: T1003.001 test #2 (`-ShowDetails`, then the test, then `-Cleanup`). Never turn off Defender or LSA protection to change the result. With LSA protection on, this result is the accepted limitation in PLANNING.md 4.3.
+9. Export only the `.jsonl` logs and roll back to `atomic-ready-3`. Never copy a dump out of the VM.
+
+**Network:** NAT for steps 1 to 6. Recordings are host-only, except T1105, which needs NAT.
 
 **→ Gate 2**
 
@@ -118,7 +146,7 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 |---|---|---|---|
 | 3.1 | A | Policy engine `decide` reading `rules/policy.yaml` (PLANNING.md 5.6): multiple actions per decision, never-suspend (path + signature), LSASS learning/enforcing mode, approved-change list. Pure Python, developed in WSL, with a unit test for every rule | All policy tests pass |
 | 3.2 | A | Enforcement in the VM (`policy/actions_windows.py`), each action with an **undo** and the **VM guard** check: suspend/resume, add/remove firewall block rule, restore registry/file from baseline, enable Controlled Folder Access | Each action and undo work on a harmless process in the VM. Each refuses to run without the marker file |
-| 3.3 | A | Build the LSASS allowlist from benign recordings, then switch `lsass_mode` to `enforcing` | List committed with evidence for each entry. Benign replay causes no LSASS suspensions |
+| 3.3 | A | Build the LSASS allowlist from benign recordings, then switch `lsass_mode` to `enforcing` | List committed with evidence for each entry. Benign replay causes no LSASS suspensions. With LSA protection on, the recorded T1003.001 sessions give no LSASS access to learn from (PLANNING.md 4.3) |
 | 3.4 | B | Train XGBoost on A's dataset. **Split by recording session, not by event**, so the same run never appears in both training and test data | Metrics on the test split |
 | 3.5 | B | Test on held-out techniques. Choose the risk threshold. Package `score_process` | Held-out results written in `docs/` |
 | 3.6 | B | Ransomware detector: file write rate + entropy of written files per process | Our T1486 script scores high. Zipping files is documented either way |
@@ -140,7 +168,7 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 | 4.2 | C | Replace all stubs with the real functions | No stub imports remain |
 | 4.3 | All | **Replay mode first:** feed recorded `events.jsonl` files through the pipeline (no live attack) | Alerts and decisions match expectations |
 | 4.4 | All | Live benign run (30–60 minutes of normal use) | False alarms counted and reviewed |
-| 4.5 | A | Live zone demos: documents, persistence, LSASS, network (PLANNING.md 8.2), with NAT on | All four work |
+| 4.5 | A | Live zone demos: documents, persistence, LSASS, network (PLANNING.md 8.2), with NAT on. The LSASS demo can't show a suspension with LSA protection on (PLANNING.md 4.3 and 9) | The other three work, and the LSASS result matches PLANNING.md 4.3 |
 | 4.6 | C | Approve/reject flow for kill requests (P5), delete requests (P6) and FIM change approval | Approval triggers the action. Rejection doesn't |
 | 4.7 | C | Prompt-injection demo: a file named like an instruction | Same decision as without the injected text |
 | 4.8 | B | Tune thresholds on live data and fix false positives | Updated threshold documented |
@@ -173,5 +201,5 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 | Snapshot | Taken at | Used for |
 |---|---|---|
 | `clean-baseline` | Step 0.5 | Fresh start |
-| `atomic-ready` | Step 2.3 | Each data-recording run |
+| `atomic-ready-3` | Step 2.3 | Each recording batch |
 | `integration-ready` | Step 4.1 | Demos and final evaluation |
