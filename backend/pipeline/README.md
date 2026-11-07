@@ -11,6 +11,7 @@ uv run python -m backend.pipeline /mnt/e/threatpulse-data/vm-export/batch-01 /mn
 - A folder with `events.jsonl` is a session. Any other folder is searched for session folders.
 - `--labels` is used for the summary only (alerts per `part`). It never reaches a decision.
 - `--read-files` samples the document files a delete burst's process wrote (see below). VM only.
+- `--use-model` lets the trained model's risk score into alerts and so into decisions. **Off by default.** The summary's `model` block says whether it was used and gives the model file's SHA-256 (checked when it was loaded). `--use-model` with no valid model is an error.
 - `--scan-files` also runs `scan_file` on process images that exist on the machine. Off by default, because a recording's Windows paths don't exist in WSL. It is meant for the VM.
 
 ## What it does, per event, in time order
@@ -19,7 +20,7 @@ uv run python -m backend.pipeline /mnt/e/threatpulse-data/vm-export/batch-01 /mn
 |---|---|---|
 | 1 | Remember processes (parent, alive), who wrote each key or file, and FIM's view of each item | causal: only events already seen |
 | 2 | `match_rules` (stateful), and a check of a started process's own SHA-256 against the known-bad list | real |
-| 3 | `score_process` on the tree that contains the alert's process | **None without a model in `triage/models/`.** A preliminary model is not safe to act on: see below |
+| 3 | `score_process` on the tree that contains the alert's process | **None unless `--use-model` is given** (and a valid model is in `triage/models/`). Without the flag the model's score cannot influence any decision |
 | 4 | `decide(alert, context)` | real. **Plans only**: automatic actions stay `pending` |
 | 5 | `write_report`, only for a high-risk alert (Confirmed, or a score of at least 0.80) | **STUB: no LLM call** |
 
@@ -49,7 +50,7 @@ After `match_rules`, a process that tripped `R-T1486-001` is judged by `detectio
 
 ## Known gaps
 
-- **Risk scores need a model, and the preliminary one is not safe to act on.** Without `triage/models/` every score is null and P2b to P5 never fire. With the preliminary model (2 of 11 batches), a replay scores nearly every alert 0.88 to 0.98, benign Edge included, because the replay tree still holds the wrapper that runs each test (training left it out) and is partial at alert time. It then plans `suspend` for benign alerts. See `triage/README.md`. Do not enable it for real use before prefix training and all 11 batches.
+- **Risk scores need `--use-model`, and the preliminary model is not safe to act on.** Without the flag, or without `triage/models/`, every score is null and P2b to P5 never fire. With the flag and the preliminary model (2 of 11 batches), a replay scores nearly every alert 0.88 to 0.98, benign Edge included, because the replay tree still holds the wrapper that runs each test (training left it out) and is partial at alert time. It then plans `suspend` for benign alerts. See `triage/README.md`. Do not enable it for real use before prefix training and all 11 batches.
 - Recordings 1 to 11 have no `process.microsoft_root`, so every process is "unknown" to the never-suspend list.
 - A persistence write gives two decisions when both the rule and FIM report it (one per alert). Both plan the same restore, which is safe to repeat.
 - A report is a template ("STUB report, no LLM call"), not an analysis.

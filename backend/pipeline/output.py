@@ -15,7 +15,6 @@ from backend.pipeline.run import SessionResult
 from contracts.validate_samples import load_validators
 from detection.session_report import part_of, read_labels
 from detection.timeline import read_jsonl
-from triage import score
 
 FIM_NOTE = (
     "APPROXIMATION: the VM's baseline.json is not in the exported recordings, so an item's "
@@ -67,6 +66,7 @@ def summarise(result: SessionResult, labels: dict[str, dict], labels_used: str) 
         "alerts_by_rule": dict(sorted(Counter(a["rule_id"] for a in alerts).items())),
         "decisions_by_rule": dict(sorted(Counter(r for d in decisions for r in d["policy_rules"]).items())),
         "actions": dict(sorted(Counter(f"{a['action']}:{a['status']}" for a in actions).items())),
+        "model": result.model,
         "entropy": {
             "reader": "on" if result.entropy_reader else "off",
             "bursts_by_verdict": result.entropy_verdicts,
@@ -79,10 +79,10 @@ def summarise(result: SessionResult, labels: dict[str, dict], labels_used: str) 
                 "so R-T1486-002 is never raised"
             ),
             "scorer": (
-                "STUB: no model in triage/models/, so score_process returns None and every risk_score is null"
-                if score.is_stub() else
-                "model: preliminary XGBoost (triage/README.md). Scores rank trees, they are not probabilities. "
-                "A replay tree includes the wrapper that runs each test, which training left out"
+                "model score IN USE (--use-model). PRELIMINARY: scores rank trees, they are not probabilities"
+                if result.model.get("used") else
+                "model score NOT USED: every risk_score is null, so no decision depends on the model"
+                + ("" if result.model.get("loaded") else " (and no model is in triage/models/)")
             ),
             "report_writer": "STUB: no LLM call",
             "suspended_pids": "always empty: nothing is executed, decisions stay pending",

@@ -1,4 +1,4 @@
-"""python -m backend.pipeline <session folder>... --out <dir> [--labels <dir>] [--scan-files] [--read-files]
+"""python -m backend.pipeline <session folder>... --out <dir> [--labels <dir>] [--scan-files] [--read-files] [--use-model]
 
 Replays recorded sessions. It only reads the session folders and refuses an --out inside
 one. Real recordings must go to a gitignored folder such as data/runs/.
@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="labels folder, for the summary only. Repeat it: the first folder with a session wins")
     parser.add_argument("--scan-files", action="store_true",
                         help="also run scan_file on process images that exist on this machine (for the VM)")
+    parser.add_argument("--use-model", action="store_true",
+                        help="let the trained model's risk score into alerts and so into decisions. "
+                             "Off by default: the model is preliminary (triage/README.md)")
     parser.add_argument("--read-files", action="store_true",
                         help="read the document files a delete burst's process wrote, to tell ransomware "
                              "output from an archiver's (for the lab VM; files outside the documents zone "
@@ -57,13 +60,17 @@ def main(argv: list[str] | None = None) -> int:
         if out == folder.resolve() or folder.resolve() in out.parents:
             parser.error(f"--out must not be inside an input folder: {folder}")
 
-    scorer = ("STUB (no model in triage/models/): every risk_score is null"
-              if score.is_stub() else "a PRELIMINARY model: scores are uncalibrated")
-    print(f"NOTE: score_process is {scorer}; write_report is a STUB. Decisions stay pending.", file=sys.stderr)
+    info = score.model_info(args.use_model)
+    if args.use_model and not info["loaded"]:
+        parser.error("--use-model given, but there is no valid model in triage/models/")
+    scorer = (f"IN USE: model sha256 {info['sha256']}, PRELIMINARY, scores are uncalibrated" if args.use_model
+              else "NOT USED (no --use-model): every risk_score is null")
+    print(f"NOTE: the model score is {scorer}; write_report is a STUB. Decisions stay pending.", file=sys.stderr)
     results, summaries = [], []
     for folder in sessions:
         result = run_session(folder, scan_files=args.scan_files,
-                             sampler=FileSampler() if args.read_files else None)
+                             sampler=FileSampler() if args.read_files else None,
+                             use_model=args.use_model)
         summary = write_session(result, folder, out, args.labels)
         results.append((result, folder))
         summaries.append(summary)

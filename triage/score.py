@@ -47,6 +47,23 @@ def is_stub() -> bool:
     return loaded_model() is None
 
 
+def model_info(used: bool) -> dict:
+    """What a run states about the model: whether its score was allowed to count, and which
+    model file it is (SHA-256, checked when the model was loaded)."""
+    loaded = loaded_model()
+    info = {"used": bool(used and loaded is not None), "loaded": loaded is not None,
+            "sha256": loaded.meta["model_sha256"] if loaded else None}
+    if loaded:
+        info["status"] = loaded.meta.get("status")
+        info["trained_on_batches"] = loaded.meta.get("trained_on_batches")
+    return info
+
+
+def no_score(events: list[dict]) -> None:
+    """The scorer a pipeline run uses unless --use-model is given: never a score."""
+    return None
+
+
 def score_with(booster, events: list[dict]) -> float | None:
     try:
         features = tree_feature_row(events)

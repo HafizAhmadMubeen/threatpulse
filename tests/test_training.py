@@ -302,7 +302,7 @@ def test_scoring_and_training_use_the_same_features(export):
 
 
 def test_the_pipeline_scores_the_tree_the_model_was_trained_on(with_model, export):
-    result = run_session(export / "batch-1" / "s1-attack")
+    result = run_session(export / "batch-1" / "s1-attack", use_model=True)
     scored = [a["risk_score"] for a in result.alerts if a["subject"]["pid"] > 0]
     assert scored and all(isinstance(v, float) and 0 <= v <= 1 for v in scored)
 
@@ -322,3 +322,53 @@ def test_models_are_gitignored_and_never_pickled():
     assert "triage/models/" in ignored and "*.pkl" in ignored
     source = (ROOT / "triage" / "model.py").read_text(encoding="utf-8")
     assert "pickle" not in source.replace("never pickle", "").replace("not pickle", "").replace("a pickle", "")
+
+
+# ---- --use-model: the model score reaches no decision unless it is asked for -------------------
+
+
+def decisions_of(result):
+    return json.dumps([result.alerts, result.decisions, result.reports], sort_keys=True)
+
+
+def test_without_use_model_the_score_is_never_used_even_with_a_model_present(with_model, export, tmp_path, monkeypatch):
+    folder = export / "batch-1" / "s1-attack"
+    default = run_session(folder)
+    assert all(a["risk_score"] is None for a in default.alerts)
+    assert default.model["used"] is False and default.model["loaded"] is True
+    # Identical to a run on a machine with no model at all.
+    monkeypatch.setattr(score, "MODEL_DIR", tmp_path / "empty")
+    score.reset_model()
+    assert decisions_of(run_session(folder)) == decisions_of(default)
+
+
+def test_use_model_lets_the_score_in_and_states_the_model_sha256(with_model, export, tmp_path):
+    folder = export / "batch-1" / "s1-attack"
+    result = run_session(folder, use_model=True)
+    assert any(isinstance(a["risk_score"], float) for a in result.alerts)
+    meta = json.loads((score.MODEL_DIR / model.META_FILE).read_text(encoding="utf-8"))
+    assert result.model["used"] is True and result.model["sha256"] == meta["model_sha256"]
+    assert result.model["sha256"] == model.sha256_of(score.MODEL_DIR / model.MODEL_FILE)
+    from backend.pipeline import output
+    summary = output.write_session(result, folder, tmp_path / "out", None)
+    assert summary["model"]["sha256"] == meta["model_sha256"] and summary["model"]["used"] is True
+    assert "IN USE" in summary["notes"]["scorer"]
+    off = output.summarise(run_session(folder), {}, "none")
+    assert off["model"]["used"] is False and "NOT USED" in off["notes"]["scorer"]
+
+
+def test_use_model_without_a_model_is_an_error_and_the_flag_is_off_by_default(export, tmp_path, capsys):
+    from backend.pipeline import __main__ as cli
+    args = ["--out", str(tmp_path / "out"), str(export / "batch-1")]
+    with pytest.raises(SystemExit):
+        cli.main(["--use-model", *args])
+    assert "no valid model" in capsys.readouterr().err
+    assert cli.main(args) == 0  # off by default: runs, with a null score everywhere
+    summary = json.loads((tmp_path / "out" / "summary.json").read_text(encoding="utf-8"))
+    assert all(s["model"]["used"] is False for s in summary["sessions"])
+
+
+def test_an_explicit_scorer_still_overrides(export):
+    result = run_session(export / "batch-1" / "s1-attack", scorer=lambda events: 0.5)
+    assert any(a["risk_score"] == 0.5 for a in result.alerts)
+    assert result.model["used"] is False  # the model was not what scored it

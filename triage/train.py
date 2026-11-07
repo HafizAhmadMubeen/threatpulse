@@ -148,6 +148,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None) -> dic
         })
         score_module.reset_model()
         report["final_model"]["saved_to"] = str(path)
+        report["final_model"]["sha256"] = model_module.sha256_of(path)
     return report
 
 
@@ -185,7 +186,8 @@ def text_report(report: dict) -> str:
             if r["alerts"]:
                 lines.append(f"    {r['session'][16:]:34} {str(r['label'])[:4]} alerts {r['alerts']:2} scored {r['scored']:2} "
                              f"range {r['score_min']}..{r['score_max']}")
-    lines += ["", report["final_model"]["note"]]
+    final = report["final_model"]
+    lines += ["", final["note"]] + ([f"Model file SHA-256: {final['sha256']}"] if "sha256" in final else [])
     return "\n".join(lines)
 
 

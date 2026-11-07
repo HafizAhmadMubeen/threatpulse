@@ -404,7 +404,7 @@ def test_the_summary_labels_its_stubs_and_its_approximation(tmp_path):
     folder = session(tmp_path, full_recording())
     summary = output.write_session(run_session(folder), folder, tmp_path / "out", None)
     notes = summary["notes"]
-    assert "STUB" in notes["scorer"] and "STUB" in notes["report_writer"]
+    assert "NOT USED" in notes["scorer"] and "STUB" in notes["report_writer"]
     assert notes["fim_baseline"].startswith("APPROXIMATION")
     assert "empty" in notes["suspended_pids"]
     assert notes["microsoft_root"].startswith("0 of")  # recordings 1 to 11 have no such field
