@@ -51,6 +51,8 @@ Default: `alert_only`. Thresholds, the debounce and the lists all come from the 
 
 `lsass_mode: learning` turns P1's `suspend` into `alert_only`, so an empty allowlist can't suspend Windows components. The allowlist matches **full path and a verified Microsoft root**, because signed `rundll32.exe` can dump LSASS. A process whose `microsoft_root` is unknown is **not** allowlisted, since a wrong yes would hide an attack.
 
+**Limit under LSA protection.** P1 acts on `process_access` events, and with LSA protection on Windows denies the dump and the sensors record no such event on `lsass.exe` (PLANNING.md 4.3). The dump command-line rule `R-T1003-002` has event type `process_start`, so P1 doesn't match it and its alert gets the default `alert_only`, at any risk score. LSASS access is also reported after the handle is opened, so a suspension would come after part of the memory was read. T1003.001 is reported as a documented limitation (PLANNING.md 8.1).
+
 ## Two walls (tests enforce both)
 
 1. **A null `risk_score` never matches `risk_score_gte`.** Null means not scored, and that includes a threshold of 0.
