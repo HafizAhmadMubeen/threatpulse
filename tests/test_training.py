@@ -620,7 +620,7 @@ def test_a_threshold_never_depends_on_its_own_test_batch(export, tmp_path):
 def test_inner_selection_only_sees_the_training_batches(export, monkeypatch):
     seen = []
     real = train.inner_scores
-    monkeypatch.setattr(train, "inner_scores", lambda mode, batches, numbers: seen.append(list(numbers)) or real(mode, batches, numbers))
+    monkeypatch.setattr(train, "inner_scores", lambda mode, batches, numbers, *rest: seen.append(list(numbers)) or real(mode, batches, numbers, *rest))
     report = train.run(spec(export), None)
     folds = [f["test_batch"] for f in report["folds"] for _ in train.MODES]
     assert len(seen) == len(folds)
@@ -703,3 +703,34 @@ def test_the_comparison_tables_show_counts_with_intervals_for_each_report(export
     assert "| A | B |" in text.replace("| complete model, summed over the held-out batches | A | B |", "| A | B |")
     assert text.count("95% CI") > 20 and "NOT in recall" in text and "Threshold chosen on training folds" in text
     assert "T1003.001 score (events)" in text
+
+
+# ---- leaving T1003.001 out of training ------------------------------------------------------
+
+
+def test_excluding_limited_trees_removes_only_those_trees_from_training(with_lsass):
+    batches = {n: trees_of(with_lsass, n) for n in (1, 2, 3)}
+    with_it = dataset.training_trees(batches, [1, 2, 3])
+    without = dataset.training_trees(batches, [1, 2, 3], exclude_limited=True)
+    assert any(t.limited for t in with_it) and not any(t.limited for t in without)
+    assert len(with_it) - len(without) == sum(t.limited for t in with_it) == 2
+    # Their benign neighbours (same sessions) stay, and held-out sessions never train either way.
+    assert any(t.row["session_id"] == "s1-lsass" and not t.positive for t in without)
+    assert not any(t.held_out for t in with_it + without)
+    assert {r["session_id"] for r in train.training_rows("snapshots", without)} == {t.row["session_id"] for t in without}
+
+
+def test_the_flag_reaches_every_training_step_and_t1003_is_still_reported_apart(with_lsass, monkeypatch):
+    seen = []
+    real = dataset.training_trees
+    monkeypatch.setattr(train, "training_trees", lambda b, n, exclude_limited=False: seen.append(exclude_limited) or real(b, n, exclude_limited))
+    report = train.run(spec(with_lsass), None, exclude_limited_from_training=True)
+    assert seen and all(seen)  # outer folds, the threshold's inner folds and the final model
+    assert report["documented_limitation"]["in_training"] is False and "LEFT OUT" in report["documented_limitation"]["note"]
+    assert report["final_model"]["t1003_in_training"] is False
+    for fold in report["folds"]:
+        assert fold["models"]["snapshots"]["documented_limitation"]["trees"] == (1 if fold["test_batch"] in (1, 2) else 0)
+    assert report["pooled"]["snapshots"]["documented_limitation"]["trees"] == 2
+    default = train.run(spec(with_lsass), None)
+    assert default["documented_limitation"]["in_training"] is True and default["final_model"]["t1003_in_training"] is True
+    assert default["final_model"]["n_positive"] > report["final_model"]["n_positive"]

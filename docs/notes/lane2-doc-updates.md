@@ -337,3 +337,7 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 3. **PLANNING.md Section 5.6:** a threshold of 0.7 is *proposed* by that rule for the saved model (in-sample for the choice). Nothing applies it. The policy keeps 0.80 until more batches exist.
 4. **PHASES.md Step 3.4:** batches 1 to 4 done. Open: batches 5 to 11, T1685 held-out, whether to drop T1003.001 trees from training (untested).
 5. **For Track A:** batch 4 has no held-out technique sessions. The held-out pair has no new trees from it.
+
+## Added on `track-b/training` (T1003.001 and training)
+1. **PLANNING.md Section 10, Decided / 8.3:** recommended: the T1003.001 attack trees (about 2 events) are left out of training and are still reported apart. On 4 batches this took benign flags at 0.80 for the complete model from 3 of 387 to 0 of 387, and the snapshot model's ordinary recall from 15 of 16 to 16 of 16, at the cost of one held-out tree slipping just under 0.80 (6 of 6 to 5 of 6). A few trees each, so not established. The default is not changed yet: `--exclude-limited-from-training`.
+2. **PLANNING.md Section 8.3:** detecting T1003.001 is a rule-layer job (`R-T1003-002`), not a model job. The model's scores on its near-empty trees (0.85 to 0.91 when it had trained on them) are not detections.

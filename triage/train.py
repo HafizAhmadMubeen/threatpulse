@@ -87,14 +87,15 @@ def choose_threshold(scores: list[float], flags: list[bool]) -> dict:
             "chosen_on": {"negatives": negatives, "positives": positives}}
 
 
-def inner_scores(mode: str, batches: dict[int, list[Tree]], train_numbers: list[int]) -> tuple[list[float], list[bool]]:
+def inner_scores(mode: str, batches: dict[int, list[Tree]], train_numbers: list[int],
+                 exclude_limited: bool = False) -> tuple[list[float], list[bool]]:
     """Leave-one-batch-out inside the training batches. Scores ordinary trees only."""
     scores, flags = [], []
     for held in train_numbers:
         others = [n for n in train_numbers if n != held]
         if not others:
             raise DatasetError("choosing a threshold needs at least two training batches")
-        booster, _ = model_module.train(training_rows(mode, training_trees(batches, others)))
+        booster, _ = model_module.train(training_rows(mode, training_trees(batches, others, exclude_limited)))
         ordinary, _ = evaluation_trees(batches[held])
         scores += model_module.predict(booster, [t.row for t in ordinary])
         flags += [t.positive for t in ordinary]
@@ -265,7 +266,8 @@ def pooled_summary(report_folds: list[dict], mode: str) -> dict:
     return out
 
 
-def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_labelled: bool = False) -> dict:
+def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_labelled: bool = False,
+        exclude_limited_from_training: bool = False) -> dict:
     batches = {n: load_batch(n, sessions, labels, only_labelled) for n, sessions, labels in batches_spec}
     folders = {n: session_folders(sessions, labels, only_labelled) for n, sessions, labels in batches_spec}
     skipped = ({n: unlabelled_sessions(sessions, labels) for n, sessions, labels in batches_spec}
@@ -273,7 +275,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
     numbers = sorted(batches)
     if len(numbers) < 3:
         raise DatasetError("leave-one-batch-out with a threshold chosen on the training folds needs at least three batches")
-    all_training = training_trees(batches, numbers)
+    all_training = training_trees(batches, numbers, exclude_limited_from_training)
     positives = sum(t.positive for t in all_training)
     report = {
         "status": preliminary_banner(len(numbers), positives),
@@ -281,9 +283,12 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
         "held_out_techniques": list(HELD_OUT_TECHNIQUES),
         "held_out_note": "T1685 has no recording yet, so held-out results cover the others only",
         "documented_limitation": {
+            "in_training": not exclude_limited_from_training,
             "techniques": list(LIMITATION_TECHNIQUES),
             "note": "LSA protection blocks the dump, so the test part has about 2 events. Reported on its own, "
-                    "never counted toward recall. These trees are still in training.",
+                    "never counted toward recall. "
+                    + ("These trees are LEFT OUT of training in this run." if exclude_limited_from_training
+                       else "These trees are still in training."),
         },
         "features": model_module.MODEL_FEATURES,
         "features_not_modelled": list(model_module.NOT_MODELLED),
@@ -299,13 +304,13 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
     out_of_fold: dict[str, tuple[list[float], list[bool]]] = {m: ([], []) for m in MODES}
     for test in numbers:
         train_numbers = [n for n in numbers if n != test]
-        trained = training_trees(batches, train_numbers)
+        trained = training_trees(batches, train_numbers, exclude_limited_from_training)
         ordinary, held_out = evaluation_trees(batches[test])
         limited = limited_trees(batches[test])
         snaps = {t.row["tree_id"]: snapshot_rows(t) for t in ordinary + held_out}
         fold = {"train_batches": train_numbers, "test_batch": test, "models": {}}
         for mode in MODES:
-            chosen = choose_threshold(*inner_scores(mode, batches, train_numbers))
+            chosen = choose_threshold(*inner_scores(mode, batches, train_numbers, exclude_limited_from_training))
             booster, info = model_module.train(training_rows(mode, trained))
             scores = model_module.predict(booster, [t.row for t in ordinary])
             out_of_fold[mode][0].extend(scores)
@@ -327,6 +332,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
     booster, info = model_module.train(training_rows("snapshots", all_training))
     report["final_model"] = {
         "trained_on_batches": numbers, "training": "prefix snapshots", **info,
+        "t1003_in_training": not exclude_limited_from_training,
         "proposed_threshold": {
             **final_threshold,
             "note": "Chosen by leave-one-batch-out over the same batches the saved model is trained on, so its "
@@ -343,6 +349,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
             "trained_sessions": sorted({t.row["session_id"] for t in all_training}),
             "held_out_techniques_excluded": list(HELD_OUT_TECHNIQUES),
             "proposed_threshold": final_threshold["threshold"],
+            "t1003_in_training": not exclude_limited_from_training,
         })
         score_module.reset_model()
         report["final_model"]["saved_to"] = str(path)
@@ -458,6 +465,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="leave out sessions that have no labels (a batch that holds a first attempt that was "
                              "decided out). They are listed by name in the report. Without it, a session "
                              "without labels stops the run")
+    parser.add_argument("--exclude-limited-from-training", action="store_true",
+                        help="leave the T1003.001 attack trees out of training (outer folds, threshold choice and "
+                             "the saved model). They are still reported apart. Default: they stay in training")
     parser.add_argument("--no-save", action="store_true", help="do not write triage/models/")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -468,7 +478,8 @@ def main(argv: list[str] | None = None) -> int:
             if out == folder or folder in out.parents:
                 parser.error(f"--out must not be inside an input folder: {folder}")
     try:
-        report = run(spec, None if args.no_save else score_module.MODEL_DIR, args.only_labelled)
+        report = run(spec, None if args.no_save else score_module.MODEL_DIR, args.only_labelled,
+                     args.exclude_limited_from_training)
     except (DatasetError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

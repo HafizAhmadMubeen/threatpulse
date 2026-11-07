@@ -304,3 +304,65 @@ uv run python -m triage.train --only-labelled \
 uv run python -m triage.compare "3 batches=data/runs/training-lobo-123/report.json" \
   "4 batches=data/runs/training-lobo-1234/report.json"
 ```
+
+### Leaving T1003.001 out of training (4 batches)
+
+T1003.001 trees (about 2 events, because LSA protection blocks the dump) are reported apart and never count toward recall. Question: should they also be left out of training? `--exclude-limited-from-training` leaves them out everywhere: the outer folds, the threshold's inner folds and the saved model. Their benign neighbours in the same sessions stay. Same 4 batches, same leave-one-batch-out, same threshold rule; only this changes.
+
+| complete model, summed over the held-out batches | with T1003.001 in training | without T1003.001 in training |
+|---|---|---|
+| Ordinary attacks caught, at 0.50 | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) |
+| Benign trees flagged, at 0.50 | 9 of 387 (2.3%, 95% CI 1.2% to 4.4%) | 2 of 387 (0.5%, 95% CI 0.1% to 1.9%) |
+| Ordinary attacks caught, at 0.80 | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) |
+| Benign trees flagged, at 0.80 | 3 of 387 (0.8%, 95% CI 0.3% to 2.3%) | 0 of 387 (0%, 95% CI 0% to 1%) |
+| Ordinary attacks caught, at the threshold chosen on training folds | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) |
+| Benign trees flagged, at the threshold chosen on training folds | 2 of 387 (0.5%, 95% CI 0.1% to 1.9%) | 2 of 387 (0.5%, 95% CI 0.1% to 1.9%) |
+| Held-out attacks caught, at 0.80 | 6 of 6 (100%, 95% CI 61% to 100%) | 6 of 6 (100%, 95% CI 61% to 100%) |
+| Held-out benign flagged, at 0.80 | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| Held-out attacks caught, at the threshold chosen on training folds | 6 of 6 (100%, 95% CI 61% to 100%) | 6 of 6 (100%, 95% CI 61% to 100%) |
+| Held-out benign flagged, at the threshold chosen on training folds | 0 of 19 (0%, 95% CI 0% to 16.8%) | 1 of 19 (5.3%, 95% CI 0.9% to 24.6%) |
+| T1003.001 flagged at 0.80 (NOT in recall) | 2 of 4 | 0 of 4 |
+| Attacks still flagged at 0.50 on 25 to 75% of their span | 10 of 30 (33.3%, 95% CI 19.2% to 51.2%) | 10 of 30 (33.3%, 95% CI 19.2% to 51.2%) |
+| Benign trees flagged early only | 11 of 314 (3.5%, 95% CI 2% to 6.2%) | 4 of 314 (1.3%, 95% CI 0.5% to 3.2%) |
+| Benign-session alerts at or above 0.80 when they fire | 3 of 3 (100%, 95% CI 43.8% to 100%) | 3 of 3 (100%, 95% CI 43.8% to 100%) |
+| Malicious-session alerts at or above 0.80 when they fire | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) |
+
+| snapshots model, summed over the held-out batches | with T1003.001 in training | without T1003.001 in training |
+|---|---|---|
+| Ordinary attacks caught, at 0.50 | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 16 of 16 (100%, 95% CI 80.6% to 100%) |
+| Benign trees flagged, at 0.50 | 10 of 387 (2.6%, 95% CI 1.4% to 4.7%) | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) |
+| Ordinary attacks caught, at 0.80 | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 16 of 16 (100%, 95% CI 80.6% to 100%) |
+| Benign trees flagged, at 0.80 | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) |
+| Ordinary attacks caught, at the threshold chosen on training folds | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 16 of 16 (100%, 95% CI 80.6% to 100%) |
+| Benign trees flagged, at the threshold chosen on training folds | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) |
+| Held-out attacks caught, at 0.80 | 6 of 6 (100%, 95% CI 61% to 100%) | 5 of 6 (83.3%, 95% CI 43.6% to 97%) |
+| Held-out benign flagged, at 0.80 | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| Held-out attacks caught, at the threshold chosen on training folds | 6 of 6 (100%, 95% CI 61% to 100%) | 6 of 6 (100%, 95% CI 61% to 100%) |
+| Held-out benign flagged, at the threshold chosen on training folds | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| T1003.001 flagged at 0.80 (NOT in recall) | 2 of 4 | 0 of 4 |
+| Attacks still flagged at 0.50 on 25 to 75% of their span | 28 of 30 (93.3%, 95% CI 78.7% to 98.2%) | 29 of 31 (93.5%, 95% CI 79.3% to 98.2%) |
+| Benign trees flagged early only | 8 of 314 (2.5%, 95% CI 1.3% to 4.9%) | 4 of 314 (1.3%, 95% CI 0.5% to 3.2%) |
+| Benign-session alerts at or above 0.80 when they fire | 1 of 3 (33.3%, 95% CI 6.1% to 79.2%) | 1 of 3 (33.3%, 95% CI 6.1% to 79.2%) |
+| Malicious-session alerts at or above 0.80 when they fire | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) |
+
+Counts first, each with its 95% interval. As before, each batch is scored by a different model, so a sum is not one model's result.
+
+What changed, in counts:
+- **Benign trees flagged at 0.80, complete model: 3 of 387 became 0 of 387.** At 0.50 it went from 9 to 2 of 387, and benign trees flagged only when partial from 11 to 4 of 314. For the snapshot model, benign trees flagged at 0.80 stayed at 6 of 387 (at 0.50: 10 to 6; flagged only when partial: 8 to 4).
+- **Ordinary attacks caught at 0.80:** complete model 15 of 16 both ways. Snapshot model **15 of 16 became 16 of 16**: the T1059.001 tree in batch 2, the only miss, went from 0.35 to 0.82. The complete model still misses it (0.08 and 0.09).
+- **T1003.001 scores: flagged at 0.80 went from 2 of 4 to 0 of 4.** That confirms that the earlier 0.85 to 0.91 scores were the model reacting to near-empty trees it had been taught were attacks, and not a detection.
+- **One held-out tree is lost at 0.80 for the snapshot model: 6 of 6 became 5 of 6.** It is T1218.011 in batch 2, 0.858 to 0.793, just under the line. At the threshold chosen on the training folds it is 6 of 6 both ways.
+- Every group is a handful of trees and the intervals overlap, so none of these differences is established. The direction is consistent: fewer false positives, no loss of recall.
+
+**Recommendation: leave T1003.001 out of training.** The reason is mechanical, not statistical. A tree of 2 events labelled "attack" has no behaviour signature to learn. With so little in it, it looks like many ordinary tiny benign trees, so training on it can only push those up, and the numbers above move that way (fewer benign flags, none of 4 T1003.001 trees scoring high by accident). Detecting T1003.001 is the rule layer's job (`R-T1003-002` fired in 3 of 4 sessions, see `detection/README.md`), not the model's. Against it: a few trees, and one held-out tree slipped just under 0.80. I have not changed the default, and the saved model is still the one trained with them in (SHA-256 above in the batch 4 section). To get the recommended model:
+
+```bash
+uv run python -m triage.train --only-labelled --exclude-limited-from-training \
+  --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
+  --batch 3 $E/batch-03 $E/batch-03-labels --batch 4 $E/batch-04 $E/batch-04-labels \
+  --out data/runs/training-lobo-1234-no1003
+uv run python -m triage.compare "with T1003.001 in training=data/runs/training-lobo-1234/report.json" \
+  "without T1003.001 in training=data/runs/training-lobo-1234-no1003/report.json"
+```
+
+`--use-model` stays off by default and the policy threshold stays at 0.80.
