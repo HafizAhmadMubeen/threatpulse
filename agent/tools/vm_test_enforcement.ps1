@@ -22,13 +22,17 @@
 #   5. restore, file: a dummy startup-folder file is quarantined and removed, then undo
 #   6. request_delete: waits for approval, then moves a dummy file to quarantine, then undo
 #   7. request_kill: runs only after approval, on the process we suspended (no undo)
-#   8. never-suspend: explorer.exe is refused even from a stale Alert. Skip with
-#      -SkipNeverSuspend. If this check ever failed, explorer would freeze: roll back
+#   8. never-suspend: two more harmless copies of ping.exe are put on a TEST-ONLY never-suspend
+#      list (rules/policy.yaml is not changed: the driver adds the entries to a copy of the
+#      loaded policy). One entry needs the path and a Microsoft-rooted signature (the live
+#      re-check through the agent), the other only the path. Each is refused even from a stale
+#      Alert that says the file is not Microsoft's, and neither is suspended. Skip with
+#      -SkipNeverSuspend
 #   9. -TestCfa only: enables Controlled Folder Access and undoes it. Do it LAST, and never
 #      before taking a snapshot that dataset recording will use
 #
-# It never touches system processes except in check 8 (which must be refused), and it
-# removes what it creates. The exit code is 1 if any check fails.
+# It never touches a real system process: every target is a copy of ping.exe in its own test
+# folder. It removes what it creates. The exit code is 1 if any check fails.
 
 param(
     [string]$Python = 'C:\ThreatPulseLab\venv-policy\Scripts\python.exe',
@@ -139,6 +143,17 @@ elif command == "exec":
     data["decision"] = execute(data["decision"], data["alert"], layout=layout)
     save(sys.argv[2], data)
     print(json.dumps(show(data["decision"])))
+elif command == "exec-protected":
+    # Test only: the same as exec, with one extra never-suspend entry in a copy of the policy.
+    import dataclasses
+    from policy import load_policy
+    from policy.loader import PathEntry
+    data = load(sys.argv[2])
+    base = load_policy()
+    policy = dataclasses.replace(base, never_suspend=base.never_suspend + (PathEntry(path=sys.argv[3], signature=sys.argv[4]),))
+    data["decision"] = execute(data["decision"], data["alert"], policy=policy)
+    save(sys.argv[2], data)
+    print(json.dumps(show(data["decision"])))
 elif command == "undo":
     print(json.dumps(undo(None if sys.argv[2] == "all" else sys.argv[2])))
 elif command == "cfa":
@@ -192,6 +207,7 @@ function Get-Action($Result, [string]$Name) { return @($Result.actions | Where-O
 function Get-FileSha256([string]$Path) { return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLower() }
 
 $ping = $null
+$protectedProcesses = @()
 try {
     New-Item -ItemType Directory -Force $work | Out-Null
     [System.IO.File]::WriteAllText($driver, $driverSource, (New-Object System.Text.UTF8Encoding($false)))
@@ -296,21 +312,31 @@ try {
     $killRow = @($rows | Where-Object { $_.action -eq 'request_kill' })[0]
     Check '7. undo says a kill cannot be undone' (($killRow.result -eq 'skipped') -and ($killRow.detail -like "*can't be undone*")) ($rows | ConvertTo-Json -Compress)
 
-    # 8. never-suspend: an Alert that wrongly says explorer is not Microsoft's
+    # 8. never-suspend, on TEST-ONLY list entries for two harmless ping copies. The Alert wrongly
+    # says the file is not Microsoft's, so the engine plans a suspend, and the live check must
+    # catch it. A copy that is on the list but whose signature does not verify as Microsoft's
+    # is not exempt by design (that file is not Microsoft's): the first variant would then be
+    # suspended, which is harmless here, and shows up as a failed check.
     if (-not $SkipNeverSuspend) {
-        $explorer = Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($explorer) {
+        $variants = @(
+            @{ File = 'ping_protected_ms.exe'; Signature = 'microsoft' },
+            @{ File = 'ping_protected_path.exe'; Signature = 'none' }
+        )
+        foreach ($variant in $variants) {
+            $copyPath = Join-Path $work $variant.File
+            Copy-Item (Join-Path $env:SystemRoot 'System32\PING.EXE') $copyPath -Force
+            $copy = Start-Process -FilePath $copyPath -ArgumentList '-n', '900', '127.0.0.1' -WindowStyle Hidden -PassThru
+            $protectedProcesses += $copy
+            Start-Sleep -Seconds 1
             $stale = @{ layer = 'rule'; rule_id = 'R-ENFTEST-003'; event_type = 'file_delete'; zone = 'documents'
-                        risk = 0.9; pid = $explorer.Id; image = 'C:\Windows\explorer.exe'; signed = $true
+                        risk = 0.9; pid = $copy.Id; image = $copyPath; signed = $true
                         signer = 'Microsoft Windows'; microsoft_root = $false }
             $plan = Plan $stale
-            Check '8. the stale Alert makes the engine plan a suspend (the live check must catch it)' ((Get-Action $plan 'suspend').status -eq 'pending')
-            $done = Invoke-Driver 'exec' $plan.id
+            Check "8. $($variant.File): the stale Alert makes the engine plan a suspend (the live check must catch it)" ((Get-Action $plan 'suspend').status -eq 'pending')
+            $done = Invoke-Driver 'exec-protected' $plan.id $copyPath $variant.Signature
             $suspend = Get-Action $done 'suspend'
-            Check '8. explorer.exe is refused by the live never-suspend check' (($suspend.status -eq 'skipped') -and ($suspend.reason -like '*never-suspend*')) $suspend.reason
-            Check '8. explorer.exe is not suspended' (-not (Test-Suspended $explorer.Id))
-        } else {
-            Write-Warning 'explorer.exe is not running, so check 8 was skipped.'
+            Check "8. $($variant.File) ($($variant.Signature) entry) is refused by the live never-suspend check" (($suspend.status -eq 'skipped') -and ($suspend.reason -like '*never-suspend*')) $suspend.reason
+            Check "8. $($variant.File) is not suspended" (-not (Test-Suspended $copy.Id))
         }
     }
 
@@ -325,6 +351,7 @@ try {
 }
 finally {
     if ($ping) { Stop-Process -Id $ping.Id -Force -ErrorAction SilentlyContinue }
+    foreach ($process in $protectedProcesses) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     Remove-ItemProperty -Path $runKey -Name $textValue, $dwordValue -ErrorAction SilentlyContinue
     Remove-Item $startupFile, $deleteFile -Force -ErrorAction SilentlyContinue
     if ($ruleName) { Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
