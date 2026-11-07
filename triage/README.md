@@ -121,3 +121,35 @@ Same at 0.50 and 0.80. Brackets are Wilson 95% intervals. Held-out techniques, s
 - **Score as a tree grows.** The gap is **large**. For example T1547.001 scores 0.26 or 0.12 on its first 10% of events and 0.98 on all of them, while a benign tree can score 0.95 to 0.98 on its first 10% to 25%. Early alert-time scores are not usable, and training on prefix snapshots is the next step, as agreed.
 - **Pipeline replay at alert time:** every scored alert gets 0.88 to 0.98, including benign sessions (Edge's autolaunch). The replay tree still holds the wrapper that runs each test, which training left out, and the tree is partial. **With the model loaded, the replay plans `suspend` for benign Edge alerts, so do not let this model's scores drive policy yet.**
 - The scoring path and the training path give the same features (maximum difference 0.0, tested).
+
+### Prefix-snapshot training (step 3.4, second version)
+
+Alert-time scores are computed on a partial process tree, so training on complete trees only mismatches what the pipeline scores. The training set now holds **snapshots**: each usable tree as it looked after 10%, 25%, 50%, 75% and 100% of its own time span (`triage/dataset.py`, `snapshot_rows`).
+- A snapshot keeps its tree's label. Benign trees get snapshots too, so the model sees partial benign trees as well as partial attacks.
+- A partial snapshot needs at least 2 events (a lone process start looks the same for every program). The whole tree is always a snapshot, so no complete-tree row is lost. Two cuts that keep the same events are one snapshot.
+- Features come from the same function `score_process` runs, built from the tree's events alone: no label, harness or file is read.
+- Snapshots are made on the training side only. Evaluation is still by whole batch and held-out techniques stay out of training.
+- The fractions and the minimum were fixed before any result was seen. One correction was made while building the set: the first draft required 2 events for every snapshot, which would have dropped the 58 single-event trees of batch 1 and confounded the comparison, so the whole tree is always kept.
+
+`python -m triage.train` trains the complete-tree model and the snapshot model side by side in every fold, so the comparison is like for like. The saved model is the snapshot model.
+
+**Skew, measured two ways** (batches 1 and 2, PRELIMINARY: a handful of attack trees)
+1. *Snapshots of the test trees:* the score at each fraction against the score of the complete tree.
+2. *Pipeline replay:* each alert's score when it fires (partial tree) against the score of the same tree at the end of the recording. Both are label-free and contain the wrapper that runs each test.
+
+| | train batch 2, test batch 1 | | train batch 1, test batch 2 | |
+|---|---|---|---|---|
+| | complete | snapshots | complete | snapshots |
+| Complete test trees at 0.50 or 0.80 | TP 5, FP 12 of 117, FN 0 | TP 4, FP 7 of 117, FN 1 | TP 4, FP 0 of 44, FN 1 | TP 4, FP 0 of 44, FN 1 |
+| Held-out techniques at 0.80 (recall) | 2 of 2 | 2 of 2 | 1 of 2 | 2 of 2 |
+| Attack score vs complete tree, \|difference\|, at 25 to 75% | 0.003 to 0.03 | 0.0005 to 0.005 | **0.79 to 0.87** | **0.008 to 0.05** |
+| Attacks still flagged at 0.5 early (25 to 75%) | 7 of 7 | 7 of 7 | **1 of 7** | **7 of 7** |
+| Benign trees flagged early only (partial at 0.5, complete below) | 1, 1, 2 of 14, 10, 52 | 1, 1, 1 of 14, 10, 52 | 0 | 0 |
+| Alert time vs complete tree, max \|difference\| (scored alerts) | 0.76 (9) | 0.95 (9) | 0.76 (8) | 0.18 (8) |
+| Benign-session alerts at or above 0.8 at alert time | 1 | 1 | 1 | 0 |
+
+How to read it:
+- **The skew for attacks went away where it was large** (second fold: from about 0.8 down to under 0.05, and 7 of 7 attacks stay flagged early instead of 1 of 7). In the first fold the complete model had little attack skew already, so there is nothing to show.
+- **The snapshot model is not clearly better on false positives.** Complete trees: FP 12 down to 7 in one fold, at the price of one missed attack (recall 5 of 5 to 4 of 5); unchanged in the other.
+- **One benign alert still scores 0.8 or more at alert time in the first fold**, with both models, and the snapshot model's worst alert-time difference got larger (0.95). Alert-time scoring still must not drive policy: `--use-model` stays off by default.
+- Every group here has between 1 and 9 attack trees, so these are differences of a few trees, not rates. The intervals in `report.json` say so.

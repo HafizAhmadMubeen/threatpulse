@@ -16,12 +16,21 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from triage.features import SessionError, extract_session_trees
+from detection.timeline import parse_ts
+from triage.features import SessionError, extract_session_trees, order_key, tree_feature_row
 
 log = logging.getLogger(__name__)
 
 HELD_OUT_TECHNIQUES = ("T1053.005", "T1685", "T1218.011")
 HELD_OUT_POOL = "held-out"
+
+
+# A snapshot is a tree as it looked part-way through: its events up to this fraction of the
+# tree's own time span. Fixed in advance. A partial snapshot with fewer events than the
+# minimum has nothing to say yet (a lone process start looks the same for every program),
+# so it is not used. The complete tree always is.
+SNAPSHOT_FRACTIONS = (0.1, 0.25, 0.5, 0.75, 1.0)
+MIN_SNAPSHOT_EVENTS = 2
 
 
 class DatasetError(ValueError):
@@ -105,3 +114,36 @@ def balance_table(batches: dict[int, list[Tree]]) -> list[dict]:
                 "unobserved_start_dropped": sum(not t.usable for t in members),
             })
     return table
+
+
+def snapshot_rows(tree: Tree) -> list[tuple[float, dict]]:
+    """(fraction, row) for each distinct snapshot of one tree, features from the same code
+    that score_process runs. The row keeps the tree's metadata and label: a snapshot of an
+    attack tree is still an attack tree, and a snapshot of a benign tree is still benign.
+
+    Cuts are by time, because that is how a tree grows while an alert waits for its
+    verdict. Two cuts that keep the same events are one snapshot (the later fraction is
+    kept). Built from the tree's own events: no label and no harness is read here."""
+    ordered = sorted(tree.events, key=order_key)
+    if not ordered:
+        return []
+    times = [parse_ts(e["ts"]).timestamp() for e in ordered]
+    first, last = times[0], times[-1]
+    found: dict[int, float] = {}
+    for fraction in SNAPSHOT_FRACTIONS:
+        cut = first + (last - first) * fraction
+        count = sum(1 for t in times if t <= cut + 1e-9)
+        # The whole tree is always a snapshot, so no complete-tree row is lost. A partial
+        # one needs enough events to say something.
+        if count >= MIN_SNAPSHOT_EVENTS or fraction == 1.0:
+            found[count] = fraction
+    rows = []
+    for count, fraction in sorted(found.items()):
+        features = tree_feature_row(ordered[:count])
+        if features is not None:
+            rows.append((fraction, {**tree.row, **features, "n_events": count}))
+    return rows
+
+
+def snapshot_training_rows(trees: list[Tree]) -> list[dict]:
+    return [row for tree in trees for _, row in snapshot_rows(tree)]

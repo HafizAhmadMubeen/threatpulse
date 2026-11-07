@@ -314,3 +314,8 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 2. Batch 3 needs `part` labels (a labels folder like `batch-02-labels-v2`) before it can be used.
 3. T1685 held-out sessions are not recorded yet.
 4. More benign sessions with short-lived processes would help: the 12 false positives in the first results are tiny benign trees.
+
+## Added on `track-b/training` (prefix snapshots)
+1. **PLANNING.md Section 10, Decided:** `| Training rows | Snapshots of each tree after 10, 25, 50, 75 and 100% of its time span. A partial snapshot needs 2 events. The whole tree is always kept. A snapshot keeps its tree's label |`.
+2. **PLANNING.md Section 8.3:** report the skew between alert-time and complete-tree scores, next to precision, recall and false-positive rate. First numbers are in `triage/README.md` (preliminary).
+3. **PHASES.md Step 3.4:** done with prefix snapshots. The skew for attacks fell where it was large, and false positives are not clearly better.

@@ -2,8 +2,14 @@
 
 Reads the exported batches (read-only) and writes a report. For each labelled batch in turn
 it trains on the OTHER batches and tests on that one (whole-batch split). Held-out
-techniques are only ever in the test side, and are reported separately. Then it trains the
-model that score_process uses on all training-pool trees, and saves it to triage/models/.
+techniques are only ever in the test side, and are reported separately.
+
+Two models are trained per fold, so the skew between partial and complete trees can be
+compared like for like:
+  complete   one row per complete process tree (the first version)
+  snapshots  one row per snapshot of each tree as it grew (triage/dataset.py)
+The model that score_process uses is the snapshot model, trained on all labelled batches
+and saved to triage/models/.
 
 Every result here is PRELIMINARY until all 11 batches exist. With a few positive trees per
 batch, a rate is a few counts, and its interval says so.
@@ -12,27 +18,35 @@ batch, a rate is a few counts, and its interval says so.
 import argparse
 import json
 import logging
+import statistics
 import sys
 from pathlib import Path
 
 from backend.pipeline import run_session
+from contracts.validate_samples import load_validators
+from detection.timeline import read_jsonl
 from triage import model as model_module
 from triage import score as score_module
-from triage.dataset import (HELD_OUT_TECHNIQUES, DatasetError, Tree, balance_table, evaluation_trees,
-                            load_batch, session_folders, training_trees)
-from triage.features import order_key, tree_feature_row
+from triage.dataset import (HELD_OUT_TECHNIQUES, MIN_SNAPSHOT_EVENTS, SNAPSHOT_FRACTIONS, DatasetError, Tree,
+                            balance_table, evaluation_trees, load_batch, session_folders, snapshot_rows,
+                            snapshot_training_rows, training_trees)
+from triage.features import events_of_tree_containing, tree_feature_row
 from triage.metrics import confusion
 
 log = logging.getLogger(__name__)
 
 THRESHOLDS = (0.5, 0.8)  # 0.50 = dashboard "alert", 0.80 = policy auto_contain
-FRACTIONS = (0.1, 0.25, 0.5, 1.0)  # how much of a tree has been seen
 TOP_NEGATIVES = 5
+MODES = ("complete", "snapshots")
 
 
 def preliminary_banner(batch_count: int, positives: int) -> str:
-    return (f"PRELIMINARY: {batch_count} of 11 batches and {positives} training positives in total. "
+    return (f"PRELIMINARY: {batch_count} of 11 batches and {positives} training positives (complete trees) in total. "
             "These numbers show that the pipeline works. They do not say how well it detects.")
+
+
+def training_rows(mode: str, trees: list[Tree]) -> list[dict]:
+    return [t.row for t in trees] if mode == "complete" else snapshot_training_rows(trees)
 
 
 def describe(tree: Tree, score: float) -> dict:
@@ -41,6 +55,7 @@ def describe(tree: Tree, score: float) -> dict:
 
 
 def evaluate_group(booster, trees: list[Tree]) -> dict:
+    """Complete trees: the same view the first version of this report had."""
     if not trees:
         return {"trees": 0}
     scores = model_module.predict(booster, [t.row for t in trees])
@@ -56,50 +71,93 @@ def evaluate_group(booster, trees: list[Tree]) -> dict:
     }
 
 
-def prefix_scores(booster, trees: list[Tree]) -> dict:
-    """Score a tree after only a fraction of its events (by time), the way the pipeline
-    sees it when an alert fires part-way through. If the score at 25% is far below the
-    score at 100%, scoring alerts early would miss attacks that training would catch."""
-    result = {"fractions": list(FRACTIONS), "positives": [], "worst_negative_by_fraction": []}
-    worst = {f: 0.0 for f in FRACTIONS}
+def snapshot_evaluation(booster, trees: list[Tree], snaps: dict[str, list[tuple[float, dict]]]) -> dict:
+    """Score every tree at each point of its growth and compare with the complete tree.
+
+    by_fraction: precision, recall and false-positive rate on the snapshots at that fraction.
+    skew: how far the partial score is from the complete-tree score (|difference|), the share
+    of attacks still flagged at 0.5 early on, and how many benign trees were flagged early
+    that the complete tree is not."""
+    by_fraction, skew = [], []
     mismatch = 0.0
+    full = {}
     for tree in trees:
-        ordered = sorted(tree.events, key=order_key)
-        scored = {}
-        for fraction in FRACTIONS:
-            cut = max(1, round(len(ordered) * fraction))
-            features = tree_feature_row(ordered[:cut])
-            scored[fraction] = None if features is None else model_module.predict_vector(booster, features)
-        full_row = model_module.predict(booster, [tree.row])[0]
-        if scored[1.0] is not None:  # the scoring path and the training path must agree
-            mismatch = max(mismatch, abs(scored[1.0] - full_row))
-        if tree.positive:
-            result["positives"].append({"session": tree.row["session_id"], "technique": tree.row["technique"],
-                                        "n_events": len(ordered),
-                                        "scores": {str(f): None if v is None else round(v, 4) for f, v in scored.items()}})
-        else:
-            for fraction, value in scored.items():
-                if value is not None:
-                    worst[fraction] = max(worst[fraction], value)
-    result["worst_negative_by_fraction"] = {str(f): round(v, 4) for f, v in worst.items()}
-    result["max_difference_serving_vs_training_features"] = round(mismatch, 8)
-    return result
+        for fraction, row in snaps[tree.row["tree_id"]]:
+            if fraction == 1.0:
+                full[tree.row["tree_id"]] = None  # filled below
+    flat = [(tree, fraction, row) for tree in trees for fraction, row in snaps[tree.row["tree_id"]]]
+    scores = model_module.predict(booster, [row for _, _, row in flat])
+    scored = {(tree.row["tree_id"], fraction): s for (tree, fraction, _), s in zip(flat, scores)}
+    for tree in trees:  # the scoring path and the training path must agree on the complete tree
+        key = (tree.row["tree_id"], 1.0)
+        if key in scored:
+            mismatch = max(mismatch, abs(scored[key] - model_module.predict(booster, [tree.row])[0]))
+            full[tree.row["tree_id"]] = scored[key]
+    for fraction in SNAPSHOT_FRACTIONS:
+        members = [(t, scored[(t.row["tree_id"], fraction)]) for t in trees if (t.row["tree_id"], fraction) in scored]
+        if not members:
+            continue
+        flags = [t.positive for t, _ in members]
+        values = [s for _, s in members]
+        by_fraction.append({"fraction": fraction, "positives": sum(flags), "negatives": len(flags) - sum(flags),
+                            "by_threshold": [confusion(values, flags, th) for th in THRESHOLDS]})
+        if fraction == 1.0:
+            continue
+        entry = {"fraction": fraction}
+        for name, wanted in (("positives", True), ("negatives", False)):
+            diffs = [abs(s - full[t.row["tree_id"]]) for t, s in members
+                     if t.positive == wanted and full.get(t.row["tree_id"]) is not None]
+            entry[name] = ({"n": len(diffs), "median_abs_diff": round(statistics.median(diffs), 4),
+                            "max_abs_diff": round(max(diffs), 4)} if diffs else {"n": 0})
+        flagged_full = [(t, s) for t, s in members if t.positive and (full.get(t.row["tree_id"]) or 0) >= 0.5]
+        entry["attacks_flagged_early"] = {"flagged": sum(1 for _, s in flagged_full if s >= 0.5), "of": len(flagged_full)}
+        benign = [(t, s) for t, s in members if not t.positive and full.get(t.row["tree_id"]) is not None]
+        entry["benign_flagged_early_only"] = {
+            "flagged": sum(1 for t, s in benign if s >= 0.5 and full[t.row["tree_id"]] < 0.5), "of": len(benign)}
+        skew.append(entry)
+    return {"by_fraction": by_fraction, "skew": skew, "max_difference_serving_vs_training": round(mismatch, 8)}
 
 
-def replay_scores(booster, folders: list[Path]) -> list[dict]:
-    """The pipeline's own view: scores at alert time on the raw recording, with no labels, so
-    the wrapper that runs each test is still inside the tree."""
-    summary = []
+def session_events(folder: Path) -> list[dict]:
+    validator = load_validators()["event"]
+    agent, _ = read_jsonl(folder / "events.jsonl")
+    fim, _ = read_jsonl(folder / "fim.jsonl")
+    return [e for e in (*agent, *fim) if validator.is_valid(e)]
+
+
+def alert_time_skew(booster, folders: list[Path]) -> dict:
+    """The pipeline's own view. Each alert is scored when it fires (a partial tree), and again
+    on the whole of the same tree at the end of the recording. Both are label-free: the
+    wrapper that runs each test is in both, which is the scorer's real situation."""
+    rows, benign_high, attack_high = [], 0, 0
     for folder in folders:
-        result = run_session(folder, scorer=lambda events: score_module.score_with(booster, events))
-        values = [a["risk_score"] for a in result.alerts if a["risk_score"] is not None]
-        summary.append({
-            "session": folder.name, "label": result.session.get("label"),
-            "alerts": len(result.alerts), "scored": len(values),
-            "score_min": round(min(values), 4) if values else None,
-            "score_max": round(max(values), 4) if values else None,
-        })
-    return summary
+        events = session_events(folder)
+        result = run_session(folder, scorer=lambda tree: score_module.score_with(booster, tree))
+        for alert in result.alerts:
+            partial = alert["risk_score"]
+            pid = alert["subject"]["pid"]
+            if partial is None or pid <= 0:
+                continue
+            features = tree_feature_row(events_of_tree_containing(events, pid))
+            if features is None:
+                continue
+            complete = model_module.predict_vector(booster, features)
+            rows.append({"session": folder.name, "label": result.session.get("label"),
+                         "alert_time": round(partial, 4), "complete": round(complete, 4)})
+    diffs = [abs(r["alert_time"] - r["complete"]) for r in rows]
+    group = lambda label, key: [r[key] for r in rows if r["label"] == label]  # noqa: E731
+    count = lambda label, key: sum(1 for v in group(label, key) if v >= 0.8)  # noqa: E731
+    return {
+        "alerts_scored": len(rows),
+        "median_abs_diff": round(statistics.median(diffs), 4) if diffs else None,
+        "max_abs_diff": round(max(diffs), 4) if diffs else None,
+        "alerts_in_benign_sessions": len(group("benign", "alert_time")),
+        "benign_session_alerts_at_or_above_0.8": {"alert_time": count("benign", "alert_time"),
+                                                  "complete_tree": count("benign", "complete")},
+        "alerts_in_malicious_sessions": len(group("malicious", "alert_time")),
+        "malicious_session_alerts_at_or_above_0.8": {"alert_time": count("malicious", "alert_time"),
+                                                     "complete_tree": count("malicious", "complete")},
+    }
 
 
 def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None) -> dict:
@@ -117,32 +175,39 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None) -> dic
         "features": model_module.MODEL_FEATURES,
         "features_not_modelled": list(model_module.NOT_MODELLED),
         "params": {**model_module.PARAMS, "rounds": model_module.ROUNDS},
+        "snapshots": {"fractions": list(SNAPSHOT_FRACTIONS), "min_events_for_a_partial_snapshot": MIN_SNAPSHOT_EVENTS},
         "balance": balance_table(batches),
         "folds": [],
     }
     for test in numbers:
         train_numbers = [n for n in numbers if n != test]
         trained = training_trees(batches, train_numbers)
-        booster, info = model_module.train([t.row for t in trained])
         ordinary, held_out = evaluation_trees(batches[test])
-        fold = {
-            "train_batches": train_numbers, "test_batch": test, "train": info,
-            "test": evaluate_group(booster, ordinary),
-            "held_out_techniques": evaluate_group(booster, held_out),
-            "partial_tree_scores": prefix_scores(booster, ordinary + held_out),
-            "replay_alert_time_scores": replay_scores(booster, folders[test]),
-        }
+        snaps = {t.row["tree_id"]: snapshot_rows(t) for t in ordinary + held_out}
+        fold = {"train_batches": train_numbers, "test_batch": test, "models": {}}
+        for mode in MODES:
+            rows = training_rows(mode, trained)
+            booster, info = model_module.train(rows)
+            fold["models"][mode] = {
+                "train": info,
+                "test": evaluate_group(booster, ordinary),
+                "held_out_techniques": evaluate_group(booster, held_out),
+                "snapshots_of_test_trees": snapshot_evaluation(booster, ordinary, snaps),
+                "snapshots_of_held_out_trees": snapshot_evaluation(booster, held_out, snaps),
+                "alert_time_skew": alert_time_skew(booster, folders[test]),
+            }
         report["folds"].append(fold)
 
-    booster, info = model_module.train([t.row for t in all_training])
+    booster, info = model_module.train(training_rows("snapshots", all_training))
     report["final_model"] = {
-        "trained_on_batches": numbers, **info,
-        "note": "Trained on every training-pool tree of the labelled batches. It has no held-out "
-                "evaluation of its own: the fold results above are the evidence, and they are preliminary.",
+        "trained_on_batches": numbers, "training": "prefix snapshots", **info,
+        "note": "The snapshot model, trained on every training-pool tree of the labelled batches. It has no "
+                "held-out evaluation of its own: the fold results above are the evidence, and they are preliminary.",
     }
     if save_to is not None:
         path = model_module.save(booster, save_to, {
-            "status": report["status"], "trained_on_batches": numbers, **info,
+            "status": report["status"], "trained_on_batches": numbers, "training": "prefix snapshots",
+            "snapshot_fractions": list(SNAPSHOT_FRACTIONS), **info,
             "trained_sessions": sorted({t.row["session_id"] for t in all_training}),
             "held_out_techniques_excluded": list(HELD_OUT_TECHNIQUES),
         })
@@ -152,40 +217,48 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None) -> dic
     return report
 
 
+def fmt_rate(r: dict) -> str:
+    return "n/a" if r["value"] is None else f"{r['value']:.2f} {r['ci95']} of {r['of']}"
+
+
 def text_report(report: dict) -> str:
     lines = [report["status"], "", "Class balance (usable trees: start observed, harness left out):"]
     for row in report["balance"]:
         lines.append(f"  batch {row['batch']} {row['group']:9} positives {row['positive_trees']:3}  "
                      f"negatives {row['negative_trees']:4}  dropped (no start event) {row['unobserved_start_dropped']}")
     for fold in report["folds"]:
-        lines += ["", f"Train on batches {fold['train_batches']}, test on batch {fold['test_batch']} "
-                      f"({fold['train']['n_positive']} positive / {fold['train']['n_negative']} negative training trees)"]
-        for name in ("test", "held_out_techniques"):
-            group = fold[name]
-            if not group["trees"]:
-                lines.append(f"  {name}: no trees")
-                continue
-            lines.append(f"  {name}: {group['positives']} positive, {group['negatives']} negative trees")
-            for c in group["by_threshold"]:
-                fmt = lambda r: "n/a" if r["value"] is None else f"{r['value']:.2f} {r['ci95']} of {r['of']}"  # noqa: E731
-                lines.append(f"    at {c['threshold']}: TP {c['tp']} FP {c['fp']} FN {c['fn']} TN {c['tn']}  "
-                             f"precision {fmt(c['precision'])}  recall {fmt(c['recall'])}  FPR {fmt(c['false_positive_rate'])}")
-            for p in group["positive_scores"]:
-                lines.append(f"    positive {p['technique']}: score {p['score']} ({p['n_events']} events)")
-            tops = ", ".join(str(n["score"]) for n in group["top_negative_scores"])
-            lines.append(f"    highest negative scores: {tops}")
-        partial = fold["partial_tree_scores"]
-        lines.append(f"  score as a tree grows ({partial['fractions']} of its events):")
-        for p in partial["positives"]:
-            lines.append(f"    {p['technique']}: {list(p['scores'].values())}")
-        lines.append(f"    worst negative: {partial['worst_negative_by_fraction']}")
-        lines.append(f"    scoring path vs training path differ by at most "
-                     f"{partial['max_difference_serving_vs_training_features']}")
-        lines.append("  pipeline replay, score when the alert fires (raw recording, wrapper still in the tree):")
-        for r in fold["replay_alert_time_scores"]:
-            if r["alerts"]:
-                lines.append(f"    {r['session'][16:]:34} {str(r['label'])[:4]} alerts {r['alerts']:2} scored {r['scored']:2} "
-                             f"range {r['score_min']}..{r['score_max']}")
+        lines += ["", f"=== Train on batches {fold['train_batches']}, test on batch {fold['test_batch']} ==="]
+        for mode, m in fold["models"].items():
+            lines.append(f"--- {mode} model ({m['train']['n_positive']} positive / {m['train']['n_negative']} negative training rows)")
+            for name in ("test", "held_out_techniques"):
+                group = m[name]
+                if not group["trees"]:
+                    lines.append(f"  {name}: no trees")
+                    continue
+                lines.append(f"  {name} (complete trees): {group['positives']} positive, {group['negatives']} negative")
+                for c in group["by_threshold"]:
+                    lines.append(f"    at {c['threshold']}: TP {c['tp']} FP {c['fp']} FN {c['fn']} TN {c['tn']}  precision "
+                                 f"{fmt_rate(c['precision'])}  recall {fmt_rate(c['recall'])}  FPR {fmt_rate(c['false_positive_rate'])}")
+                for p in group["positive_scores"]:
+                    lines.append(f"    positive {p['technique']}: score {p['score']} ({p['n_events']} events)")
+            snap = m["snapshots_of_test_trees"]
+            lines.append("  snapshots of test trees, by how much of the tree is seen (at 0.5: recall, false positives):")
+            for b in snap["by_fraction"]:
+                c = b["by_threshold"][0]
+                lines.append(f"    {b['fraction']:>4}: {b['positives']} pos / {b['negatives']} neg   TP {c['tp']} FN {c['fn']}  FP {c['fp']} of {b['negatives']}")
+            lines.append("  skew to the complete tree (|difference|, attacks still flagged, benign flagged only early):")
+            for s in snap["skew"]:
+                pos, neg = s["positives"], s["negatives"]
+                lines.append(f"    {s['fraction']:>4}: attacks median {pos.get('median_abs_diff')} max {pos.get('max_abs_diff')}, "
+                             f"flagged {s['attacks_flagged_early']['flagged']}/{s['attacks_flagged_early']['of']};  "
+                             f"benign median {neg.get('median_abs_diff')} max {neg.get('max_abs_diff')}, "
+                             f"early-only {s['benign_flagged_early_only']['flagged']}/{s['benign_flagged_early_only']['of']}")
+            a = m["alert_time_skew"]
+            lines.append(f"  pipeline replay, alert-time vs complete tree ({a['alerts_scored']} scored alerts, median |diff| {a['median_abs_diff']}, max {a['max_abs_diff']}):")
+            lines.append(f"    benign sessions: {a['alerts_in_benign_sessions']} alerts, at or above 0.8: alert-time "
+                         f"{a['benign_session_alerts_at_or_above_0.8']['alert_time']}, complete tree {a['benign_session_alerts_at_or_above_0.8']['complete_tree']}")
+            lines.append(f"    malicious sessions: {a['alerts_in_malicious_sessions']} alerts, at or above 0.8: alert-time "
+                         f"{a['malicious_session_alerts_at_or_above_0.8']['alert_time']}, complete tree {a['malicious_session_alerts_at_or_above_0.8']['complete_tree']}")
     final = report["final_model"]
     lines += ["", final["note"]] + ([f"Model file SHA-256: {final['sha256']}"] if "sha256" in final else [])
     return "\n".join(lines)

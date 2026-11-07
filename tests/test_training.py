@@ -22,7 +22,8 @@ def benign_recording() -> Recording:
     recording = Recording()
     notepad = P(310, 100, "C:\\Windows\\notepad.exe", "notepad.exe")
     recording.start(notepad, 2.0)
-    recording.add(notepad, "file_write", 3.0, path="C:\\Users\\lab\\AppData\\x.tmp")
+    for i in range(8):  # a benign process that works for a while, so it has partial snapshots
+        recording.add(notepad, "file_write", 3.0 + i * 0.5, path=f"C:\\Users\\lab\\AppData\\x{i}.tmp")
     recording.stop(notepad, 9.0)
     ghost = P(400, 1, "C:\\Windows\\System32\\svchost.exe", "svchost.exe")  # running before recording began
     recording.add(ghost, "file_write", 3.5, path="C:\\Windows\\Temp\\y.tmp")
@@ -166,18 +167,21 @@ def test_every_fold_tests_on_a_batch_it_never_trained_on(export):
         assert fold["test_batch"] not in fold["train_batches"]
     assert "PRELIMINARY" in report["status"]
     assert report["held_out_techniques"] == ["T1053.005", "T1685", "T1218.011"]
-    held = report["folds"][1]["held_out_techniques"]
+    held = report["folds"][1]["models"]["snapshots"]["held_out_techniques"]
     assert held["positives"] == 1
-    assert report["folds"][0]["held_out_techniques"]["trees"] == 0  # batch 1 has no held-out session
+    assert report["folds"][0]["models"]["snapshots"]["held_out_techniques"]["trees"] == 0  # batch 1 has none
 
 
 def test_the_report_has_precision_recall_and_false_positive_rate(export):
     report = train.run(spec(export), None)
     for fold in report["folds"]:
-        for threshold in fold["test"]["by_threshold"]:
-            assert {"precision", "recall", "false_positive_rate", "tp", "fp", "fn", "tn"} <= set(threshold)
+        assert set(fold["models"]) == {"complete", "snapshots"}
+        for m in fold["models"].values():
+            for threshold in m["test"]["by_threshold"]:
+                assert {"precision", "recall", "false_positive_rate", "tp", "fp", "fn", "tn"} <= set(threshold)
+            assert m["snapshots_of_test_trees"]["by_fraction"] and "alerts_scored" in m["alert_time_skew"]
     text = train.text_report(report)
-    assert "precision" in text and "recall" in text and "FPR" in text and "PRELIMINARY" in text
+    assert all(w in text for w in ("precision", "recall", "FPR", "PRELIMINARY", "skew", "alert-time"))
 
 
 def test_the_saved_model_is_trained_without_held_out_sessions(export, tmp_path):
@@ -187,6 +191,7 @@ def test_the_saved_model_is_trained_without_held_out_sessions(export, tmp_path):
     assert "s2-heldout" not in meta["trained_sessions"]
     assert meta["held_out_techniques_excluded"] == ["T1053.005", "T1685", "T1218.011"]
     assert meta["trained_on_batches"] == [1, 2] and "PRELIMINARY" in meta["status"]
+    assert meta["training"] == "prefix snapshots"
 
 
 def test_the_cli_refuses_an_output_inside_an_input(export, capsys):
@@ -372,3 +377,80 @@ def test_an_explicit_scorer_still_overrides(export):
     result = run_session(export / "batch-1" / "s1-attack", scorer=lambda events: 0.5)
     assert any(a["risk_score"] == 0.5 for a in result.alerts)
     assert result.model["used"] is False  # the model was not what scored it
+
+
+# ---- prefix snapshots ---------------------------------------------------------------------
+
+
+def trees_of(export, batch=1):
+    return dataset.load_batch(batch, export / f"batch-{batch}", export / f"batch-{batch}-labels")
+
+
+def attack_tree(export):
+    return next(t for t in trees_of(export) if t.positive)
+
+
+def test_snapshots_are_prefixes_of_the_tree_by_time(export):
+    tree = attack_tree(export)
+    snaps = dataset.snapshot_rows(tree)
+    fractions = [f for f, _ in snaps]
+    counts = [row["n_events"] for _, row in snaps]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    assert counts == sorted(set(counts)) and counts[-1] == tree.row["n_events"]  # distinct, growing, whole tree last
+    assert len(snaps) > 1
+    for _, row in snaps:
+        assert row["label"] == "malicious" and row["batch"] == 1  # a snapshot keeps its tree's label and metadata
+
+
+def test_the_whole_tree_is_always_a_snapshot_and_equals_the_complete_row(export):
+    for tree in trees_of(export):
+        if not tree.usable:
+            continue
+        snaps = dataset.snapshot_rows(tree)
+        assert snaps and snaps[-1][0] == 1.0
+        full = snaps[-1][1]
+        for name in model.MODEL_FEATURES:
+            assert full[name] == tree.row[name], name
+
+
+def test_partial_snapshots_need_enough_events_but_single_event_trees_are_kept(export):
+    for tree in trees_of(export):
+        if not tree.usable:
+            continue
+        snaps = dataset.snapshot_rows(tree)
+        for fraction, row in snaps:
+            assert fraction == 1.0 or row["n_events"] >= dataset.MIN_SNAPSHOT_EVENTS
+        if tree.row["n_events"] == 1:
+            assert [f for f, _ in snaps] == [1.0]
+
+
+def test_benign_trees_get_snapshots_too(export):
+    benign = [t for t in trees_of(export) if t.usable and not t.positive and t.row["n_events"] > 3]
+    assert benign and any(len(dataset.snapshot_rows(t)) > 1 for t in benign)
+
+
+def test_snapshots_come_from_the_trees_events_alone(export):
+    """No label and no harness is read: change every label on the tree and the rows' features stay."""
+    tree = attack_tree(export)
+    before = dataset.snapshot_rows(tree)
+    flipped = dataset.Tree({**tree.row, "label": "benign", "technique": ""}, tree.events)
+    after = dataset.snapshot_rows(flipped)
+    assert [{k: r[k] for k in model.MODEL_FEATURES} for _, r in before] == [{k: r[k] for k in model.MODEL_FEATURES} for _, r in after]
+
+
+def test_snapshot_training_has_more_rows_than_complete_training_and_no_held_out(export):
+    batches = {n: trees_of(export, n) for n in (1, 2)}
+    trees = dataset.training_trees(batches, [1, 2])
+    assert len(train.training_rows("snapshots", trees)) > len(train.training_rows("complete", trees)) == len(trees)
+    assert "s2-heldout" not in {r["session_id"] for r in train.training_rows("snapshots", trees)}
+    # Training rows only ever come from trees of the training batches given.
+    only_one = dataset.training_trees(batches, [1])
+    assert {r["batch"] for r in train.training_rows("snapshots", only_one)} == {1}
+
+
+def test_the_saved_model_is_the_snapshot_model(export, tmp_path):
+    report = train.run(spec(export), tmp_path / "m")
+    assert report["final_model"]["training"] == "prefix snapshots"
+    complete = report["folds"][0]["models"]["complete"]["train"]["n_positive"]
+    assert report["folds"][0]["models"]["snapshots"]["train"]["n_positive"] >= complete
+    assert len(report["final_model"]["sha256"]) == 64
