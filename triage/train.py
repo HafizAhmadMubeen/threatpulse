@@ -41,10 +41,10 @@ from contracts.validate_samples import load_validators
 from detection.timeline import read_jsonl
 from triage import model as model_module
 from triage import score as score_module
-from triage.dataset import (HELD_OUT_TECHNIQUES, LIMITATION_TECHNIQUES, MIN_SNAPSHOT_EVENTS, SNAPSHOT_FRACTIONS,
+from triage.dataset import (DEFAULT_RECORDING_TESTS, HELD_OUT_TECHNIQUES, LIMITATION_TECHNIQUES, MIN_SNAPSHOT_EVENTS, SNAPSHOT_FRACTIONS,
                             DatasetError, Tree, balance_table, evaluation_trees, limited_trees, load_batch,
-                            session_folders, snapshot_rows, snapshot_training_rows, training_trees,
-                            unlabelled_sessions)
+                            load_excluded_pools, pool_excluded_sessions, session_folders, snapshot_rows,
+                            snapshot_training_rows, training_trees, unlabelled_sessions)
 from triage.features import events_of_tree_containing, tree_feature_row
 from triage.metrics import confusion, pool, rate, show
 
@@ -267,18 +267,30 @@ def pooled_summary(report_folds: list[dict], mode: str) -> dict:
     return out
 
 
-def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_labelled: bool = False,
-        include_limited_in_training: bool = False) -> dict:
-    batches = {n: load_batch(n, sessions, labels, only_labelled) for n, sessions, labels in batches_spec}
-    folders = {n: session_folders(sessions, labels, only_labelled) for n, sessions, labels in batches_spec}
-    skipped = ({n: unlabelled_sessions(sessions, labels) for n, sessions, labels in batches_spec}
-               if only_labelled else {})
+def prepare(batches_spec: list[tuple[int, Path, Path]], only_labelled: bool,
+            excluded_pools: tuple[str, ...]) -> tuple[dict, dict, dict, dict]:
+    """Load the batches, skipping what is skipped on purpose. Nothing here trains anything.
+
+    Returns the trees per batch, the session folders per batch (the same ones: replays use
+    them too), the sessions left out for having no labels, and the sessions left out because
+    their pool is in excluded_from_ml_pools. A session of an excluded pool is skipped before its
+    labels are looked at, and it reaches neither training nor evaluation."""
+    batches = {n: load_batch(n, sessions, labels, only_labelled, excluded_pools) for n, sessions, labels in batches_spec}
+    folders = {n: session_folders(sessions, labels, only_labelled, excluded_pools) for n, sessions, labels in batches_spec}
+    no_labels = ({n: unlabelled_sessions(sessions, labels, excluded_pools) for n, sessions, labels in batches_spec}
+                 if only_labelled else {})
+    pool_left_out = {n: pool_excluded_sessions(sessions, excluded_pools) for n, sessions, _ in batches_spec}
+    return batches, folders, no_labels, pool_left_out
+
+
+def report_header(batches: dict, skipped: dict, pool_left_out: dict, include_limited_in_training: bool,
+                  excluded_pools: tuple[str, ...], excluded_source: dict | None) -> tuple[dict, list]:
+    """Everything in the report that is known before any model is trained. Returns it and the
+    trees of the final model's training set. Nothing here trains anything."""
     numbers = sorted(batches)
-    if len(numbers) < 3:
-        raise DatasetError("leave-one-batch-out with a threshold chosen on the training folds needs at least three batches")
     all_training = training_trees(batches, numbers, include_limited_in_training)
     positives = sum(t.positive for t in all_training)
-    report = {
+    header = {
         "status": preliminary_banner(len(numbers), positives),
         "scheme": "leave-one-batch-out",
         "held_out_techniques": list(HELD_OUT_TECHNIQUES),
@@ -301,8 +313,25 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
                                    "inside the training batches, is at most the cap. Training folds only."},
         "balance": balance_table(batches),
         "sessions_left_out_for_having_no_labels": {str(n): names for n, names in skipped.items() if names},
+        "excluded_from_ml_pools": list(excluded_pools),
+        "excluded_pools_source": excluded_source,
+        "sessions_left_out_for_an_excluded_pool": {str(n): items for n, items in pool_left_out.items() if items},
         "folds": [],
     }
+    return header, all_training
+
+
+def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_labelled: bool = False,
+        include_limited_in_training: bool = False, excluded_pools: tuple[str, ...] = (),
+        excluded_source: dict | None = None) -> dict:
+    """`excluded_pools` comes from recording_tests.json (the CLI always supplies it). Programs
+    that call run() directly pass it themselves: the default of none is only for tests."""
+    batches, folders, skipped, pool_left_out = prepare(batches_spec, only_labelled, excluded_pools)
+    numbers = sorted(batches)
+    if len(numbers) < 3:
+        raise DatasetError("leave-one-batch-out with a threshold chosen on the training folds needs at least three batches")
+    report, all_training = report_header(batches, skipped, pool_left_out, include_limited_in_training,
+                                         excluded_pools, excluded_source)
     out_of_fold: dict[str, tuple[list[float], list[bool]]] = {m: ([], []) for m in MODES}
     for test in numbers:
         train_numbers = [n for n in numbers if n != test]
@@ -393,13 +422,25 @@ def pooled_lines(pooled: dict) -> list[str]:
     return lines
 
 
+def left_out_lines(report: dict) -> list[str]:
+    """The sessions skipped on purpose, by name, with the reason."""
+    lines = []
+    pools = report.get("excluded_from_ml_pools", [])
+    lines.append(f"Pools left out of training and evaluation (excluded_from_ml_pools): {pools or 'none given'}")
+    for n, items in report.get("sessions_left_out_for_an_excluded_pool", {}).items():
+        lines.append(f"Batch {n}: {len(items)} session(s) left out for an excluded pool: "
+                     + ", ".join(f"{i['session']} (pool {i['pool']})" for i in items))
+    for n, names in report.get("sessions_left_out_for_having_no_labels", {}).items():
+        lines.append(f"Batch {n}: {len(names)} session(s) left out, no labels (decided out): " + ", ".join(names))
+    return lines
+
+
 def text_report(report: dict) -> str:
     lines = [report["status"], f"Scheme: {report['scheme']}. Held-out techniques: {report['held_out_techniques']} "
                                f"({report['held_out_note']}).",
-             f"T1003.001 is a documented limitation: {report['documented_limitation']['note']}", "",
-             "Class balance (usable trees: start observed, harness left out; positives exclude T1003.001):"]
-    for n, names in report.get("sessions_left_out_for_having_no_labels", {}).items():
-        lines.append(f"Batch {n}: {len(names)} session(s) left out, no labels (decided out): " + ", ".join(names))
+             f"T1003.001 is a documented limitation: {report['documented_limitation']['note']}", ""]
+    lines += left_out_lines(report)
+    lines += ["", "Class balance (usable trees: start observed, harness left out; positives exclude T1003.001):"]
     for row in report["balance"]:
         lines.append(f"  batch {row['batch']} {row['group']:9} attacks {row['positive_trees']:3}  "
                      f"T1003.001 {row['documented_limitation_trees']}  benign {row['negative_trees']:4}  "
@@ -471,6 +512,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="put the T1003.001 attack trees (about 2 events) into training. By default they are left "
                              "out (outer folds, threshold choice and the saved model), because a tree that small has no "
                              "behaviour to learn. They are reported apart either way")
+    parser.add_argument("--recording-tests", type=Path, default=DEFAULT_RECORDING_TESTS,
+                        help="Track A's recording_tests.json. Its excluded_from_ml_pools (today: fim-test-only) lists "
+                             "pools whose sessions are skipped for training and evaluation. The file and the key are "
+                             "required, and the run stops without them")
     parser.add_argument("--no-save", action="store_true", help="do not write triage/models/")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -481,8 +526,10 @@ def main(argv: list[str] | None = None) -> int:
             if out == folder or folder in out.parents:
                 parser.error(f"--out must not be inside an input folder: {folder}")
     try:
+        pools = load_excluded_pools(args.recording_tests)
+        source = {"path": str(args.recording_tests), "sha256": model_module.sha256_of(args.recording_tests)}
         report = run(spec, None if args.no_save else score_module.MODEL_DIR, args.only_labelled,
-                     args.include_limited_in_training)
+                     args.include_limited_in_training, pools, source)
     except (DatasetError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

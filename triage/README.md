@@ -376,3 +376,15 @@ Retrained on batches 1 to 4 with T1003.001 left out of training (the default), p
 - **SHA-256: `c9ee90469b20adb98ab4eff56b22ec209ad177e4c10e9309db7a956e8d0c7ff3`** (it replaces `e34707ec2e08e58a5085046b1bc514e778fe4cc083fb4bb8307afcc55b738d78`, the version trained with T1003.001 in). It is local and gitignored. The run summary prints the SHA-256 of whatever model is loaded.
 - The leave-one-batch-out results of this run are identical, number for number, to the explicit "without T1003.001" run in the previous section, so the default reproduces it.
 - The threshold the rule proposes for it is **0.5**. It is chosen by leave-one-batch-out over the same four batches the model is trained on, so it is in-sample for the choice, and it is only a proposal. Nothing applies it: the policy threshold stays at **0.80** and `--use-model` stays off by default.
+
+### Pools left out of training and evaluation (`excluded_from_ml_pools`)
+
+Track A's `agent/config/recording_tests.json` lists pools that are never used to train or evaluate the model, under `excluded_from_ml_pools` (today `["fim-test-only"]`: the FIM evidence session, a script that changes persistence items whose Run-key writes look like T1547.001, so a model that saw it would learn the script). `triage/dataset.py` reads that list and applies it:
+
+- A session whose pool is in the list is **skipped before anything else is read**, in the loader that feeds both training and evaluation. It needs no labels. It never reaches training, recall, the threshold's inner folds, the snapshot rows, the class-balance table or the pipeline replays of a run.
+- **Skipped sessions are reported by name**, with their pool, in the report (`sessions_left_out_for_an_excluded_pool`, and a line per batch at the top of `report.txt`). The report also records the pool list and the SHA-256 of the file it came from.
+- **The list comes from the file and nowhere else.** No pool name is written into the loader.
+- **The run stops rather than guess.** If the file is missing, is not JSON, or has no `excluded_from_ml_pools` key (an older plan), the run stops with a message. If a session's pool is neither one of the known pools (`training-technique`, `held-out`, `unassigned`) nor excluded, it stops too, so a new pool can never be loaded as ordinary data. A session whose pool cannot be read is not assumed harmless either.
+- **Where the file is.** The key is on `track-a/fim-session` or later, so `agent/config/recording_tests.json` may not exist on this branch yet. Until Track A's branch is merged, pass a copy: `--recording-tests PATH` (the commands in the sections above need it now).
+
+Not covered: `detection/rule_eval.py` (the rule-layer evaluation) does not apply this list. It is only ever given batches 1 to 4, which hold no such session. Do not point it at a folder that has one.

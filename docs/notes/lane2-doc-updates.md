@@ -356,3 +356,8 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 ## Added on `track-b/training` (T1003.001 left out of training by default)
 1. **PLANNING.md Section 10, Decided:** `| T1003.001 in training | Left out by default (--include-limited-in-training puts it back). Reason: a 2-event tree has no behaviour to learn, not the evaluation numbers. Both versions are reported. T1003.001 is always reported apart and never counts toward recall |`. The saved model is retrained: SHA-256 c9ee90469b20adb98ab4eff56b22ec209ad177e4c10e9309db7a956e8d0c7ff3, batches 1 to 4, local only.
 2. **PLANNING.md Section 5.6:** the rule proposes a threshold of 0.5 for the new saved model (in-sample for the choice). Nothing applies it: the policy keeps 0.80.
+
+## Added on `track-b/training` (pools left out of ML)
+1. **PLANNING.md Section 10, Decided:** `| Pools left out of ML | triage/dataset.py skips every session whose pool is in excluded_from_ml_pools in agent/config/recording_tests.json (today fim-test-only), for training and evaluation, and reports them by name. The list comes from that file only. A missing file, a missing key, or an unknown pool stops the run |`.
+2. **For Track A:** `recording_tests.json` is read by `python -m triage.train --recording-tests PATH` (default `agent/config/recording_tests.json`). The key `excluded_from_ml_pools` is required. If another pool is ever added to the list, the loader needs no change. If a new pool is used and not listed, the run stops with its name.
+3. **For `detection/rule_eval.py`:** it does not skip excluded pools. It has only seen batches 1 to 4, which contain none. Add the same skip before pointing it at a batch 0 folder.

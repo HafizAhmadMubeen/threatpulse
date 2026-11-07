@@ -746,10 +746,12 @@ def test_the_cli_default_leaves_them_out_and_the_old_flag_is_gone(with_lsass, tm
     assert "--include-limited-in-training" in source and "--exclude-limited-from-training" not in source
     assert inspect.signature(train.run).parameters["include_limited_in_training"].default is False
     assert inspect.signature(dataset.training_trees).parameters["include_limited"].default is False
+    plan = tmp_path / "recording_tests.json"
+    plan.write_text(json.dumps({"tests": [], "excluded_from_ml_pools": ["fim-test-only"]}), encoding="utf-8")
     code = train.main(["--batch", "1", str(with_lsass / "batch-1"), str(with_lsass / "batch-1-labels"),
                        "--batch", "2", str(with_lsass / "batch-2"), str(with_lsass / "batch-2-labels"),
                        "--batch", "3", str(with_lsass / "batch-3"), str(with_lsass / "batch-3-labels"),
-                       "--out", str(tmp_path / "out")])
+                       "--recording-tests", str(plan), "--out", str(tmp_path / "out")])
     assert code == 0
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["documented_limitation"]["in_training"] is False
@@ -809,3 +811,171 @@ def test_the_limited_techniques_are_a_list_of_techniques_not_a_size_limit():
     import inspect
     source = inspect.getsource(dataset.Tree.limited.fget)
     assert "LIMITATION_TECHNIQUES" in source and "n_events" not in source and "MIN_SNAPSHOT_EVENTS" not in source
+
+
+# ---- pools listed in excluded_from_ml_pools are skipped, for training and for evaluation ------
+# None of these tests trains anything: they stop at the first call to the trainer.
+
+FIM_POOL = ("fim-test-only",)
+
+
+class StopBeforeTraining(RuntimeError):
+    pass
+
+
+def plan_file(tmp_path: Path, content: object) -> Path:
+    path = tmp_path / "recording_tests.json"
+    path.write_text(content if isinstance(content, str) else json.dumps(content), encoding="utf-8")
+    return path
+
+
+def add_fim_session(export: Path, name="s1-fim", batch=1, labels=True, malicious=False) -> None:
+    """A script that changes persistence items. Its Run-key writes look like T1547.001."""
+    make_session(export, name, attack_recording(), batch=batch, pool="fim-test-only",
+                 technique="T1547.001" if malicious else None, malicious=malicious)
+    if not labels:
+        (export / f"batch-{batch}-labels" / name / "labels.csv").unlink()
+
+
+def test_the_pool_list_is_read_from_recording_tests_json(tmp_path):
+    path = plan_file(tmp_path, {"tests": [], "excluded_from_ml_pools": ["fim-test-only"]})
+    assert dataset.load_excluded_pools(path) == ("fim-test-only",)
+    assert dataset.load_excluded_pools(plan_file(tmp_path, {"excluded_from_ml_pools": []})) == ()
+
+
+@pytest.mark.parametrize("content, message", [
+    ("{not json", "cannot read"),
+    ({"tests": []}, "no excluded_from_ml_pools"),
+    ([], "no excluded_from_ml_pools"),
+    ({"excluded_from_ml_pools": "fim-test-only"}, "list of pool names"),
+    ({"excluded_from_ml_pools": ["fim-test-only", 3]}, "list of pool names"),
+    ({"excluded_from_ml_pools": [""]}, "list of pool names"),
+])
+def test_a_bad_or_incomplete_recording_tests_file_stops_the_run(tmp_path, content, message):
+    with pytest.raises(DatasetError, match=message):
+        dataset.load_excluded_pools(plan_file(tmp_path, content))
+
+
+def test_a_missing_recording_tests_file_stops_the_run_and_says_where_it_lives(tmp_path):
+    with pytest.raises(DatasetError, match="track-a/fim-session"):
+        dataset.load_excluded_pools(tmp_path / "nowhere.json")
+
+
+def test_a_session_of_an_excluded_pool_is_skipped_by_name_and_needs_no_labels(export):
+    add_fim_session(export, labels=False)
+    batches, folders, no_labels, left_out = train.prepare(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+    assert left_out == {1: [{"session": "s1-fim", "pool": "fim-test-only"}], 2: [], 3: []}
+    assert "s1-fim" not in {p.name for p in folders[1]} and "s1-fim" not in {t.row["session_id"] for t in batches[1]}
+    assert no_labels == {}  # only_labelled was off, and the skipped session is not an "unlabelled" one either
+    _, _, no_labels, _ = train.prepare(spec(export), only_labelled=True, excluded_pools=FIM_POOL)
+    assert all("s1-fim" not in names for names in no_labels.values())
+
+
+def test_without_the_exclusion_such_a_session_is_not_loaded_as_ordinary_data(export):
+    add_fim_session(export)  # it has labels, and a pool that nothing lists as excluded
+    with pytest.raises(DatasetError, match=r"pool 'fim-test-only' is neither a known pool"):
+        dataset.load_batch(1, export / "batch-1", export / "batch-1-labels")
+    with pytest.raises(DatasetError, match="fim-test-only"):
+        train.prepare(spec(export), only_labelled=False, excluded_pools=())
+    # A pool nobody has heard of stops the run the same way.
+    make_session(export, "s2-odd", benign_recording(), batch=2, pool="some-new-pool", malicious=False)
+    with pytest.raises(DatasetError, match="some-new-pool"):
+        dataset.load_batch(2, export / "batch-2", export / "batch-2-labels")
+
+
+def test_an_unreadable_session_pool_is_never_assumed_harmless(export):
+    (export / "batch-1" / "s1-attack" / "session.json").write_text("{broken", encoding="utf-8")
+    with pytest.raises(DatasetError, match="cannot read the pool"):
+        train.prepare(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+
+
+def test_an_excluded_session_never_reaches_training_or_recall(export):
+    """An attack-looking one (technique T1547.001, labelled test events) in batch 1, listed as excluded."""
+    reference = {n: dataset.load_batch(n, export / f"batch-{n}", export / f"batch-{n}-labels") for n in (1, 2, 3)}
+    add_fim_session(export, malicious=True)
+    batches, _, _, left_out = train.prepare(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+    assert left_out[1] == [{"session": "s1-fim", "pool": "fim-test-only"}]
+    everywhere = []
+    for n in (1, 2, 3):
+        ordinary, held_out = dataset.evaluation_trees(batches[n])
+        everywhere += batches[n] + ordinary + held_out + dataset.limited_trees(batches[n])
+    for include in (False, True):
+        everywhere += dataset.training_trees(batches, [1, 2, 3], include_limited=include)
+    assert "s1-fim" not in {t.row["session_id"] for t in everywhere}
+    assert "s1-fim" not in {r["session_id"] for r in dataset.snapshot_training_rows(dataset.training_trees(batches, [1, 2, 3]))}
+    # The sets are exactly what they are without that session: nothing of it moved a count.
+    assert dataset.balance_table(batches) == dataset.balance_table(reference)
+    for n in (1, 2, 3):
+        assert [t.row["tree_id"] for t in batches[n]] == [t.row["tree_id"] for t in reference[n]]
+
+
+def test_the_trainer_is_never_handed_a_row_of_an_excluded_session(export, monkeypatch):
+    add_fim_session(export, malicious=True)
+    seen = []
+
+    def stop(rows):
+        seen.append({r["session_id"] for r in rows})
+        raise StopBeforeTraining
+
+    monkeypatch.setattr(train.model_module, "train", stop)
+    with pytest.raises(StopBeforeTraining):
+        train.run(spec(export), None, excluded_pools=FIM_POOL)
+    assert seen and "s1-fim" not in seen[0] and seen[0]  # the first training call, in the threshold's inner fold
+    # Told nothing about the pool, the run stops before any training, instead of training on it.
+    seen.clear()
+    with pytest.raises(DatasetError, match="fim-test-only"):
+        train.run(spec(export), None)
+    assert seen == []
+
+
+def test_the_report_lists_the_skipped_sessions_by_name(export):
+    add_fim_session(export)
+    batches, _, skipped, left_out = train.prepare(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+    source = {"path": "recording_tests.json", "sha256": "0" * 64}
+    header, all_training = train.report_header(batches, skipped, left_out, False, FIM_POOL, source)
+    assert header["excluded_from_ml_pools"] == ["fim-test-only"] and header["excluded_pools_source"] == source
+    assert header["sessions_left_out_for_an_excluded_pool"] == {"1": [{"session": "s1-fim", "pool": "fim-test-only"}]}
+    assert "s1-fim" not in {t.row["session_id"] for t in all_training}
+    lines = train.left_out_lines(header)
+    assert any("Batch 1: 1 session(s) left out for an excluded pool: s1-fim (pool fim-test-only)" in line for line in lines)
+    assert any("excluded_from_ml_pools" in line and "fim-test-only" in line for line in lines)
+    none_given, _ = train.report_header(batches, skipped, left_out, False, (), None)
+    assert any("none given" in line for line in train.left_out_lines(none_given))
+
+
+def test_the_cli_reads_the_pool_list_and_stops_without_a_usable_file(export, tmp_path, monkeypatch, capsys):
+    batches = ["--batch", "1", str(export / "batch-1"), str(export / "batch-1-labels"),
+               "--batch", "2", str(export / "batch-2"), str(export / "batch-2-labels"),
+               "--batch", "3", str(export / "batch-3"), str(export / "batch-3-labels")]
+    got = {}
+
+    def capture(spec_, save_to, only_labelled=False, include_limited=False, pools=(), source=None):
+        got.update(pools=pools, source=source)
+        raise StopBeforeTraining
+
+    monkeypatch.setattr(train, "run", capture)
+    plan = plan_file(tmp_path, {"tests": [], "excluded_from_ml_pools": ["fim-test-only"]})
+    with pytest.raises(StopBeforeTraining):
+        train.main([*batches, "--recording-tests", str(plan), "--out", str(tmp_path / "out")])
+    assert got["pools"] == ("fim-test-only",)
+    assert got["source"] == {"path": str(plan), "sha256": model.sha256_of(plan)}
+    # No file, or a file without the key: it stops, and never trains on a guess.
+    got.clear()
+    assert train.main([*batches, "--recording-tests", str(tmp_path / "missing.json"), "--out", str(tmp_path / "o2")]) == 1
+    assert "track-a/fim-session" in capsys.readouterr().err
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({"tests": []}), encoding="utf-8")
+    assert train.main([*batches, "--recording-tests", str(old), "--out", str(tmp_path / "o3")]) == 1
+    assert "no excluded_from_ml_pools" in capsys.readouterr().err
+    assert got == {}  # run() was never reached
+
+
+def test_the_default_recording_tests_path_is_track_as_file():
+    assert dataset.DEFAULT_RECORDING_TESTS.name == "recording_tests.json"
+    assert dataset.DEFAULT_RECORDING_TESTS.parent.name == "config" and dataset.DEFAULT_RECORDING_TESTS.parent.parent.name == "agent"
+    # The pool name is not written into the loader: the file is the single source of the list.
+    import inspect
+    logic = (inspect.getsource(dataset.load_excluded_pools) + inspect.getsource(dataset.session_folders)
+             + inspect.getsource(dataset.load_batch) + inspect.getsource(dataset.pool_excluded_sessions)
+             + inspect.getsource(train.prepare))
+    assert "fim-test-only" not in logic and "fim-test-only" not in dataset.KNOWN_POOLS
