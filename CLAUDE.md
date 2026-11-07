@@ -62,7 +62,7 @@ agent (C++)  -> events.jsonl -> detection layers (B) -> Alert
 |---|---|---|
 | Document folders | Ransomware | Controlled Folder Access + own detector (write rate + entropy) → suspend |
 | Run/RunOnce keys, startup folders, hosts file | Persistence | FIM detects → restore every unapproved change → suspend origin only if risk score is high and it's still running |
-| LSASS memory | Credential dumping | Sysmon Event ID 10 with memory-read access, not in allowlist → suspend (alert-only while in learning mode) |
+| LSASS memory | Credential dumping | Sysmon Event ID 10 with memory-read access, not in allowlist → suspend (alert-only while in learning mode). With LSA protection on no access is recorded: see Accepted limitations |
 | Network | Exfiltration / C2 | Per-program Windows Firewall block rule |
 
 Policy rules live in `rules/policy.yaml` (subject / object / environment attributes, NIST SP 800-162 terms). The full rule set is in PLANNING.md Section 5.6. Every decision records which rules fired and which attributes caused them. A decision can hold several actions, each with its own status. The never-suspend list matches by **full path + Microsoft signature**, never by name alone.
@@ -142,6 +142,7 @@ The full list is in PLANNING.md Section 10.
 ## Accepted limitations
 
 - User-mode only: detect-then-contain, not prevention (e.g. LSASS access is reported after the handle opens).
+- LSASS under LSA protection: Windows denies the dump and the sensors see little of the attempt (the recorded T1003.001 test part is 2 events, with no `process_access` on `lsass.exe`). Sysmon Event ID 10 only helps where the access is visible. The command-line rule `R-T1003-002` is the layer that still fires, where the command line is captured, and the policy engine only alerts on it. The evaluation reports T1003.001 as a documented limitation, not as a model success or failure (PLANNING.md 4.3 and 8.1).
 - Persistence protection is detect-and-revert.
 - Windows only, single endpoint, prototype for controlled lab environments, not production EDR.
 

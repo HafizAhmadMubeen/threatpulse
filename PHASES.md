@@ -146,7 +146,7 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 |---|---|---|---|
 | 3.1 | A | Policy engine `decide` reading `rules/policy.yaml` (PLANNING.md 5.6): multiple actions per decision, never-suspend (path + signature), LSASS learning/enforcing mode, approved-change list. Pure Python, developed in WSL, with a unit test for every rule | All policy tests pass |
 | 3.2 | A | Enforcement in the VM (`policy/actions_windows.py`), each action with an **undo** and the **VM guard** check: suspend/resume, add/remove firewall block rule, restore registry/file from baseline, enable Controlled Folder Access | Each action and undo work on a harmless process in the VM. Each refuses to run without the marker file |
-| 3.3 | A | Build the LSASS allowlist from benign recordings, then switch `lsass_mode` to `enforcing` | List committed with evidence for each entry. Benign replay causes no LSASS suspensions |
+| 3.3 | A | Build the LSASS allowlist from benign recordings, then switch `lsass_mode` to `enforcing` | List committed with evidence for each entry. Benign replay causes no LSASS suspensions. With LSA protection on, the recorded T1003.001 sessions give no LSASS access to learn from (PLANNING.md 4.3) |
 | 3.4 | B | Train XGBoost on A's dataset. **Split by recording session, not by event**, so the same run never appears in both training and test data | Metrics on the test split |
 | 3.5 | B | Test on held-out techniques. Choose the risk threshold. Package `score_process` | Held-out results written in `docs/` |
 | 3.6 | B | Ransomware detector: file write rate + entropy of written files per process | Our T1486 script scores high. Zipping files is documented either way |
@@ -168,7 +168,7 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 | 4.2 | C | Replace all stubs with the real functions | No stub imports remain |
 | 4.3 | All | **Replay mode first:** feed recorded `events.jsonl` files through the pipeline (no live attack) | Alerts and decisions match expectations |
 | 4.4 | All | Live benign run (30–60 minutes of normal use) | False alarms counted and reviewed |
-| 4.5 | A | Live zone demos: documents, persistence, LSASS, network (PLANNING.md 8.2), with NAT on | All four work |
+| 4.5 | A | Live zone demos: documents, persistence, LSASS, network (PLANNING.md 8.2), with NAT on. The LSASS demo can't show a suspension with LSA protection on (PLANNING.md 4.3 and 9) | The other three work, and the LSASS result matches PLANNING.md 4.3 |
 | 4.6 | C | Approve/reject flow for kill requests (P5), delete requests (P6) and FIM change approval | Approval triggers the action. Rejection doesn't |
 | 4.7 | C | Prompt-injection demo: a file named like an instruction | Same decision as without the injected text |
 | 4.8 | B | Tune thresholds on live data and fix false positives | Updated threshold documented |

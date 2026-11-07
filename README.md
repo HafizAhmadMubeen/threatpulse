@@ -60,7 +60,7 @@ flowchart LR
 |---|---|---|
 | User document folders | Ransomware | Windows Controlled Folder Access + our own mass-encryption detector → suspend |
 | Run/RunOnce keys, startup folders, hosts file | Persistence | Detect change → restore unapproved changes from baseline → suspend high-risk origin process |
-| LSASS process memory | Credential dumping | Detect memory-read access (Sysmon Event ID 10) by a non-allowlisted process → suspend |
+| LSASS process memory | Credential dumping | Detect memory-read access (Sysmon Event ID 10) by a non-allowlisted process → suspend. With LSA protection on no access is recorded, so the dump command line is what is detected (PLANNING.md 4.3) |
 | Network | Exfiltration / C2 | Per-program Windows Firewall block rule |
 
 ## Design principles

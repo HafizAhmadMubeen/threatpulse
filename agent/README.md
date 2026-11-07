@@ -456,6 +456,8 @@ Settled in the VM:
 
 Windows blocked the dump, but the agent recorded no sign of the attempt in `process_access`. A single test can't show why, and the project Sysmon config in PLANNING.md Section 9 is untested. Nothing was disabled to get this result.
 
+**The same result in the dataset.** The four recorded T1003.001 #2 sessions (one per batch from batch 1 to batch 4) each have a test part of 2 events, PowerShell's start and stop, and none has a `process_access` event on `lsass.exe`. The behaviour rule `R-T1003-002` (the dump command line), replayed over them, fires in 3 of them. In the fourth, the PowerShell command line was not captured (null), so it could not fire. The policy engine gives that alert `alert_only`, because rule P1 matches only `process_access` events. This is a documented limitation, not a model result (PLANNING.md 4.3 and 8.1).
+
 **Batch 1 of the dataset (PHASES.md steps 2.4 and 2.5).** The batch was recorded with `run_batch.ps1`, exported, and checked read-only. Counts only: the logs stay out of the repo.
 
 | Session | Events | Malicious | Benign | None | Exit code | FIM changes |
