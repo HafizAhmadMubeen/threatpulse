@@ -197,3 +197,106 @@ A file is **suspect** when its sampled entropy is at least 7.5 bits per byte and
 ```bash
 uv run pytest tests/test_behaviour.py
 ```
+
+### Rule evaluation on batches 1 to 4 (read-only)
+
+`python -m detection.rule_eval` replays every labelled session through a fresh `match_rules` engine and counts what fires. It changes no rule, threshold, session or labels folder (a test checks the rule files byte for byte). It reads `--batch N SESSIONS LABELS` the way `triage.train` does, with `--only-labelled` for batch 3's second run.
+
+```bash
+uv run python -m detection.rule_eval --only-labelled \
+  --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
+  --batch 3 $E/batch-03 $E/batch-03-labels --batch 4 $E/batch-04 $E/batch-04-labels \
+  --out data/runs/rule-eval-1234
+```
+
+How things are counted:
+- An attack session's alert is *in the test part* when most of its evidence events are labelled `part=test`. Harness alerts (the wrapper that runs a test) and background alerts are counted apart and are never detections.
+- **FIM alerts have no labels**, so they are placed by time: inside the session's test window (`start_utc` to `end_utc`) or not. Those rows say so.
+- A technique is *detected* in a session when a rule written for that technique fired in the test part. A rule of another technique firing there is a *cross-fire*, not a hit.
+- A benign session counts as having an alert for any alert inside its window. Alerts before `start_utc` or after `end_utc` are counted apart, with the reason (below).
+- Every event is replayed or counted as skipped: 431,915 events replayed, 0 skipped as invalid, 0 rejected by the engine.
+
+#### Where each rule comes from (in-sample or not)
+
+- Written: 9a68638, 2026-11-06 19:00 +0500, from the design (PLANNING.md, ATT&CK) and tests that build their own events.
+- Rule files changed since: no, never.
+- Thresholds: starting guesses, never tuned (detection/README.md): 10 deletes or renames in 30 s (T1486), connect then write within 30 s (T1105).
+- Engine change made after data: 5959aee (2026-11-06 19:19 +0500), after replaying batch 1: de-duplication ignores case, because ETW and Sysmon spell one registry key differently. Affects R-T1547-001, R-T1547-002, R-T1685-001.
+
+| Batch | Status for the rules |
+|---|---|
+| 1 | IN-SAMPLE: replayed while the rules were being finished. It produced the de-duplication fix, and the README's first-real-recordings notes. No rule or threshold changed. |
+| 2 | SEEN, not tuned: replayed through the orchestrator work, which noted the R-T1486-001 false positive on the benign zip session. Nothing was changed. |
+| 3 | OUT-OF-SAMPLE: not looked at before this evaluation. |
+| 4 | OUT-OF-SAMPLE: not looked at before this evaluation. |
+
+#### Per technique: which rules fired in the test part
+
+| Technique | Detected (a rule for it fired in the test part) | Batches 3 and 4 only (out-of-sample) | Rules fired in the test part (alerts) | Harness alerts | Background alerts |
+|---|---|---|---|---|---|
+| T1003.001 | 3 of 4 (75%, 95% CI 30.1% to 95.4%) | 2 of 2 (100%, 95% CI 34.2% to 100%) | R-T1003-002 x3 | none | none |
+| T1053.005 | 3 of 3 (100%, 95% CI 43.8% to 100%) | 1 of 1 (100%, 95% CI 20.7% to 100%) | R-T1053-001 x3 | none | none |
+| T1059.001 | 4 of 4 (100%, 95% CI 51% to 100%) | 2 of 2 (100%, 95% CI 34.2% to 100%) | R-T1059-001 x4 | none | none |
+| T1218.011 | 3 of 3 (100%, 95% CI 43.8% to 100%) | 1 of 1 (100%, 95% CI 20.7% to 100%) | R-T1218-001 x3 | none | none |
+| T1486 | 4 of 4 (100%, 95% CI 51% to 100%) | 2 of 2 (100%, 95% CI 34.2% to 100%) | R-T1486-001 x4 | none | none |
+| T1547.001 | 8 of 8 (100%, 95% CI 67.6% to 100%) | 4 of 4 (100%, 95% CI 51% to 100%) | R-FIM-PERSISTENCE x7, R-T1547-001 x8 | none | none |
+
+#### Per rule
+
+| Rule | Written or tuned against | Techniques | Fired in the test part of its own technique | of which batches 3 and 4 | Cross-fired in another technique's test part | Benign sessions with this rule | Benign alerts | Harness alerts | Background alerts (attack sessions) |
+|---|---|---|---|---|---|---|---|---|---|
+| R-FIM-PERSISTENCE | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | T1547.001 | 7 of 8 (87.5%, 95% CI 52.9% to 97.8%) (by time window, FIM has no labels) | 4 of 4 | none | 1 of 8 (12.5%, 95% CI 2.2% to 47.1%) | 2 | 0 | 0 |
+| R-FIM-HOSTS | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | none | no sessions of its own technique (by time window, FIM has no labels) | none | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1003-001 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | T1003.001 | 0 of 4 (0%, 95% CI 0% to 49%) | 0 of 2 | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1003-002 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample; added from the LSA-protection design (PLANNING.md 4.3), not from data | T1003.001 | 3 of 4 (75%, 95% CI 30.1% to 95.4%) | 2 of 2 | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1053-001 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | T1053.005 | 3 of 3 (100%, 95% CI 43.8% to 100%) | 1 of 1 | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1059-001 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | T1059.001 | 4 of 4 (100%, 95% CI 51% to 100%) | 2 of 2 | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1105-001 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | T1105 | no sessions of its own technique | none | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1218-001 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample | T1218.011 | 3 of 3 (100%, 95% CI 43.8% to 100%) | 1 of 1 | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1486-001 | design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample; threshold 10 in 30 s is a guess, batch 2's zip false positive was seen and not tuned | T1486 | 4 of 4 (100%, 95% CI 51% to 100%) | 2 of 2 | none | 2 of 8 (25%, 95% CI 7.1% to 59.1%) | 2 | 0 | 0 |
+| R-T1547-001 | design and synthetic events; batch 1 IN-SAMPLE (de-duplication fixed after replaying it); batch 2 seen; batches 3 and 4 out-of-sample | T1547.001 | 8 of 8 (100%, 95% CI 67.6% to 100%) | 4 of 4 | none | 1 of 8 (12.5%, 95% CI 2.2% to 47.1%) | 1 | 0 | 0 |
+| R-T1547-002 | design and synthetic events; batch 1 IN-SAMPLE (de-duplication fixed after replaying it); batch 2 seen; batches 3 and 4 out-of-sample | T1547.001 | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 of 4 | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+| R-T1685-001 | design and synthetic events; batch 1 IN-SAMPLE (de-duplication fixed after replaying it); batch 2 seen; batches 3 and 4 out-of-sample | T1685 | no sessions of its own technique | none | none | 0 of 8 (0%, 95% CI 0% to 32.4%) | 0 | 0 | 0 |
+
+#### Benign sessions
+
+Benign sessions with any alert in their window: 3 of 8 (37.5%, 95% CI 13.7% to 69.4%). Batches 3 and 4 only (out-of-sample): 1 of 4 (25%, 95% CI 4.6% to 69.9%).
+
+| Batch | Benign sessions with any alert |
+|---|---|
+| 1 | 1 of 2 (50%, 95% CI 9.5% to 90.5%) |
+| 2 | 1 of 2 (50%, 95% CI 9.5% to 90.5%) |
+| 3 | 1 of 2 (50%, 95% CI 9.5% to 90.5%) |
+| 4 | 0 of 2 (0%, 95% CI 0% to 65.8%) |
+
+| Benign session | Batch | Alerts by rule (in the window) |
+|---|---|---|
+| 20261106T132018-benign-run1 | 1 | R-FIM-PERSISTENCE x2, R-T1547-001 x1 |
+| 20261106T133812-benign-run2 | 1 | none |
+| 20261106T144718-benign-run3 | 2 | R-T1486-001 x1 |
+| 20261106T150136-benign-run4 | 2 | none |
+| 20261106T191833-benign-run5 | 3 | R-T1486-001 x1 |
+| 20261106T193554-benign-run6 | 3 | none |
+| 20261107T051144-benign-run7 | 4 | none |
+| 20261107T052338-benign-run8 | 4 | none |
+
+Events replayed: 431915. Skipped as invalid against the Event schema: 0. Rejected by the engine as malformed: 0.
+
+Alerts outside a session's window (before start_utc or after end_utc), not counted above: after_end 11.
+
+| Outside the window | Rule | Session | Part | Alerts |
+|---|---|---|---|---|
+| after_end | R-FIM-PERSISTENCE | malicious | fim-outside-test-window | 7 |
+| after_end | R-T1486-001 | malicious | harness | 4 |
+
+What the numbers say, and what they cannot:
+- **25 of 26 attack sessions were detected** (96.2%, 95% CI 81.1% to 99.3%) by a rule written for their technique, and **12 of 12 in batches 3 and 4**, the out-of-sample ones (100%, 95% CI 75.7% to 100%). Nothing from a harness or from background activity was counted as a detection.
+- **The one miss is T1003.001 in batch 2** (the test part is one PowerShell start and stop 30 ms apart, with no command line and no LSASS access event). `R-T1003-002`, the command-line rule, caught 3 of 4. `R-T1003-001` (an LSASS read) caught **0 of 4**, as LSA protection predicts: it never sees an access event.
+- **`R-FIM-PERSISTENCE` fired in 7 of 8 `T1547.001` sessions.** The miss is batch 1 test 2, which writes `RunOnceEx`, a key FIM did not watch then. The behaviour rule `R-T1547-001` caught all 8. `R-T1547-002` (a file in a Startup folder) fired in 0 of 8, because no recorded test uses a Startup folder, so there is no evidence for or against it.
+- **No evidence at all for `R-T1105-001` and `R-T1685-001`**: no recorded session of their techniques yet. `R-FIM-HOSTS` has no technique and no session exercised the hosts file.
+- **Benign sessions: 3 of 8 produced any alert** (37.5%, 95% CI 13.7% to 69.4%), and **1 of 4 in batches 3 and 4**. `R-T1486-001` fired in 2 of 8: both are the zip-extraction sessions (batch 2 run 3, and the zip-files session in batch 3). So zip extraction trips it every time it was recorded (2 of 2). No count or window separates it from the attack script (see the first-real-recordings notes). The entropy layer is meant to address this and can only be checked in the VM. `R-T1547-001` and `R-FIM-PERSISTENCE` fired in the batch 1 benign session (Edge rewriting its autolaunch Run value).
+- **Outside the windows:** 11 alerts, all from the cleanup that follows a test: 7 `R-FIM-PERSISTENCE` (the cleanup undoing the Run key) and 4 `R-T1486-001` (the cleanup deleting the test folder, labelled harness). They are not counted anywhere above.
+
+**What is in-sample.** All 13 rules were written in one commit (`9a68638`, 2026-11-06 19:00 +0500) from the design and from tests that build their own events, and **no rule file has changed since**: a test fails if one does. The one thing changed after real data was the engine's de-duplication (`5959aee`, after replaying batch 1): it now ignores case, because ETW and Sysmon spell one registry key differently. That affects `R-T1547-001`, `R-T1547-002` and `R-T1685-001`, so batch 1 is **in-sample** for those three. For the other rules batch 1 and batch 2 were looked at and written up with nothing changed, so they are **seen, not tuned**. Batches 3 and 4 were not looked at before this evaluation, and are the out-of-sample results. Thresholds (10 deletes in 30 s, connect then write in 30 s) are guesses and were never tuned. Two limits apply even to the out-of-sample figures:
+- **They are repeats of the same scripted tests.** Each batch runs the same Atomic tests and our own T1486 script, so 12 of 12 says the rules fire on those test behaviours again. It does not show they catch a different implementation of the same technique, and the rules were never tried against evasion.
+- **The rules were written knowing which techniques were planned**, including the held-out ones. "Held-out" protects the ML model, not the rules.
