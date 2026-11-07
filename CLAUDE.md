@@ -29,7 +29,7 @@ Static tools are bypassed by packing, obfuscation and dynamic API resolution, an
 | Gen | Technique | Component |
 |---|---|---|
 | 1st | Signatures | SHA-256 hash list + YARA |
-| 2nd | Heuristics + integrity | `pefile` heuristics, EMBER-trained static model, File Integrity Monitoring |
+| 2nd | Heuristics + integrity | `pefile` heuristics and File Integrity Monitoring. The EMBER-trained static model is future work |
 | 3rd | Behaviour | ETW/Sysmon telemetry + Sigma-style ATT&CK-mapped rules |
 | 4th | AI/ML | XGBoost behavioural triage + LLM/RAG reports |
 | 4th | Access control | ABAC policy engine guarding protected zones |
@@ -133,7 +133,7 @@ The full list is in PLANNING.md Section 10.
 | Persistence zone | Restore unapproved changes. Suspend only by risk score |
 | Containment | Limited containment is in scope |
 | Phase order | PHASES.md is authoritative for steps. PLANNING.md for design, contracts and gates |
-| Scope | Full scope as designed: C++ ETW agent, EMBER static model, all layers and zones |
+| Scope | The design covers the C++ ETW agent, all layers and all zones. The current release is the subset in PLANNING.md Section 2.1. Future work: the EMBER static model, a full live end-to-end integration, backend API authentication, further batches and an LSASS demonstration |
 | Lab | One lab VM (Track A). B and C develop in WSL only |
 | LLM | Free-tier cloud API through a **provider-agnostic client** (switching provider is one setting); local Ollama as fallback. Keys only in `.env` (gitignored), never in code, logs or commits |
 

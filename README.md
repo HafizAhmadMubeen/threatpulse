@@ -2,7 +2,7 @@
 
 **Behaviour-based, AI-assisted endpoint threat detection for Windows: a 4th-generation malware scanner.**
 
-> **Status:** Active development. See [PLANNING.md](PLANNING.md) for the full plan, [PHASES.md](PHASES.md) for step-by-step phases, and [ROADMAP.md](ROADMAP.md) for who builds what.
+> **Status:** Active development. The current release covers all four scanner generations, a dataset of 47 recorded sessions, LLM reports with a technique-ID validator, and a dashboard demo from replayed sessions: see [Current release](#current-release). See [PLANNING.md](PLANNING.md) for the full plan, [PHASES.md](PHASES.md) for step-by-step phases, and [ROADMAP.md](ROADMAP.md) for who builds what.
 
 ---
 
@@ -34,7 +34,7 @@ Anti-malware design is commonly described in four generations: simple signature 
 | Generation | Technique | ThreatPulse component |
 |---|---|---|
 | 1st | Signatures | SHA-256 known-bad hash list, YARA rules |
-| 2nd | Heuristics + integrity checking | Static PE heuristics (entropy, packers, imports; EMBER-trained model), File Integrity Monitoring of critical files and registry keys |
+| 2nd | Heuristics + integrity checking | Static PE heuristics (entropy, packers, imports), File Integrity Monitoring of critical files and registry keys. The design adds an EMBER-trained static model, which is future work |
 | 3rd | Behaviour (activity traps) | ETW/Sysmon telemetry + Sigma-style behaviour rules mapped to ATT&CK |
 | 4th | AI / ML | XGBoost behavioural triage + LLM/RAG incident reports |
 | 4th | Access control enforcement | ABAC policy engine guarding protected zones |
@@ -63,6 +63,21 @@ flowchart LR
 | LSASS process memory | Credential dumping | Detect memory-read access (Sysmon Event ID 10) by a non-allowlisted process → suspend. With LSA protection on no access is recorded, so the dump command line is what is detected (PLANNING.md 4.3) |
 | Network | Exfiltration / C2 | Per-program Windows Firewall block rule |
 
+## Current release
+
+The sections above describe the full design. The current release covers:
+
+- **All four scanner generations.** Generation 2 rests on `pefile` heuristics and File Integrity Monitoring.
+- **A recorded dataset** of 47 sessions from our own lab VM: batches 1 to 6 and one T1685 batch, with batch 6 as the NAT batch.
+- **Verification in the VM:** the EICAR and UPX check, the ransomware entropy check, a test of every enforcement action and its undo, and live zone demos for ransomware and persistence.
+- **LLM reports** with the technique-ID validator, and the prompt-injection demo.
+- **A dashboard demo** from replayed recorded sessions, with approve and reject, plus screen-recorded live zone demos in the VM.
+- **An evaluation** with leave-one-batch-out, a per-technique table, the false-positive rate, rule-layer results, latency, and limitations with counts.
+
+**Future work:** the EMBER static model, a full live end-to-end integration, backend API authentication, further recording batches, and a demonstration of the LSASS zone. The last is a documented limitation: with LSA protection on, the sensors record no access to LSASS ([PLANNING.md](PLANNING.md) Section 4.3).
+
+The full list, with session counts, is in [PLANNING.md](PLANNING.md#21-release-scope) Section 2.1.
+
 ## Design principles
 
 1. **The LLM never triggers enforcement.** It reads attacker-controlled text (command lines, file names), so it is exposed to indirect prompt injection. Only the deterministic policy engine acts.
@@ -76,7 +91,7 @@ flowchart LR
 | Part | Technology |
 |---|---|
 | Endpoint agent | C++, Windows ETW (via Microsoft's `krabsetw`), Sysmon |
-| Signatures & heuristics | YARA, `pefile`, EMBER features |
+| Signatures & heuristics | YARA, `pefile`. EMBER features for the static model (future work) |
 | Triage | Python, XGBoost |
 | Backend | FastAPI |
 | RAG agent | LangChain, ChromaDB, MITRE ATT&CK STIX data |
