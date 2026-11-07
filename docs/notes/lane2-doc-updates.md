@@ -330,3 +330,10 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 2. **PLANNING.md Section 8.3:** first results on 3 batches are in `triage/README.md`. Recall at 0.80 fell when batch 3 joined training (12 of 15 for the complete-tree model, 9 of 15 for the snapshot model), false positives fell (5 of 273). Nothing is conclusive: each group has 1 to 9 attack trees.
 3. **PHASES.md Step 3.4:** batches 1 to 3 done. Open: batches 4 to 11 (batch 4 is in the export), T1685 held-out, leave-one-batch-out to choose thresholds, a decision on how to handle a batch-level shift in the background.
 4. **PHASES.md Step 3.9:** `python -m triage.train --only-labelled` leaves out sessions with no labels, and names them.
+
+## Added on `track-b/training` (batch 4, leave-one-batch-out)
+1. **PLANNING.md Section 8.3 (metrics):** report every rate as a count with its 95% interval. Report T1003.001 apart as a documented limitation (about 2 events, LSA protection), never inside recall. Results on 4 batches are in `triage/README.md`: 15 of 16 ordinary attacks caught at 0.80, 6 of 387 benign flagged (snapshot model), 6 of 6 held-out. Still preliminary, and the attack trees repeat the same scripted tests, so trees from different batches are not independent.
+2. **PLANNING.md Section 10, Decided:** `| Evaluation | Leave-one-batch-out. A threshold is only ever chosen from training folds: inside the training batches, the lowest value in 0.5 to 0.95 with a pooled false-positive rate of at most 2%. The rule needs at least 3 training batches |`; `| Documented limitation | T1003.001 is reported apart and never counts toward recall |`.
+3. **PLANNING.md Section 5.6:** a threshold of 0.7 is *proposed* by that rule for the saved model (in-sample for the choice). Nothing applies it. The policy keeps 0.80 until more batches exist.
+4. **PHASES.md Step 3.4:** batches 1 to 4 done. Open: batches 5 to 11, T1685 held-out, whether to drop T1003.001 trees from training (untested).
+5. **For Track A:** batch 4 has no held-out technique sessions. The held-out pair has no new trees from it.

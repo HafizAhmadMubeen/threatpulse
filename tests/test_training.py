@@ -65,7 +65,7 @@ def make_session(root: Path, name: str, recording: Recording, *, batch: int, poo
 @pytest.fixture
 def export(tmp_path):
     """Two batches. Batch 2 also has a held-out technique session."""
-    for batch in (1, 2):
+    for batch in (1, 2, 3):
         make_session(tmp_path, f"s{batch}-attack", attack_recording(), batch=batch)
         make_session(tmp_path, f"s{batch}-benign", benign_recording(), batch=batch, malicious=False)
     make_session(tmp_path, "s2-heldout", attack_recording(), batch=2, pool="held-out", technique="T1218.011")
@@ -73,7 +73,7 @@ def export(tmp_path):
 
 
 def spec(export: Path):
-    return [(n, export / f"batch-{n}", export / f"batch-{n}-labels") for n in (1, 2)]
+    return [(n, export / f"batch-{n}", export / f"batch-{n}-labels") for n in (1, 2, 3)]
 
 
 # ---- metrics ------------------------------------------------------------------------------
@@ -163,7 +163,7 @@ def test_a_wrong_batch_number_and_missing_labels_are_refused(export):
 
 def test_every_fold_tests_on_a_batch_it_never_trained_on(export):
     report = train.run(spec(export), None)
-    assert [(f["train_batches"], f["test_batch"]) for f in report["folds"]] == [([2], 1), ([1], 2)]
+    assert [(f["train_batches"], f["test_batch"]) for f in report["folds"]] == [([2, 3], 1), ([1, 3], 2), ([1, 2], 3)]
     for fold in report["folds"]:
         assert fold["test_batch"] not in fold["train_batches"]
     assert "PRELIMINARY" in report["status"]
@@ -182,7 +182,7 @@ def test_the_report_has_precision_recall_and_false_positive_rate(export):
                 assert {"precision", "recall", "false_positive_rate", "tp", "fp", "fn", "tn"} <= set(threshold)
             assert m["snapshots_of_test_trees"]["by_fraction"] and "alerts_scored" in m["alert_time_skew"]
     text = train.text_report(report)
-    assert all(w in text for w in ("precision", "recall", "FPR", "PRELIMINARY", "skew", "alert-time"))
+    assert all(w in text for w in ("attacks caught", "benign flagged", "flagged that were attacks", "PRELIMINARY", "skew", "alert time", "95% CI"))
 
 
 def test_the_saved_model_is_trained_without_held_out_sessions(export, tmp_path):
@@ -191,7 +191,7 @@ def test_the_saved_model_is_trained_without_held_out_sessions(export, tmp_path):
     meta = json.loads((out / model.META_FILE).read_text(encoding="utf-8"))
     assert "s2-heldout" not in meta["trained_sessions"]
     assert meta["held_out_techniques_excluded"] == ["T1053.005", "T1685", "T1218.011"]
-    assert meta["trained_on_batches"] == [1, 2] and "PRELIMINARY" in meta["status"]
+    assert meta["trained_on_batches"] == [1, 2, 3] and "PRELIMINARY" in meta["status"]
     assert meta["training"] == "prefix snapshots"
 
 
@@ -215,8 +215,8 @@ def test_model_features_are_behaviour_only():
 
 
 def train_small(export: Path):
-    batches = {n: dataset.load_batch(n, export / f"batch-{n}", export / f"batch-{n}-labels") for n in (1, 2)}
-    rows = [t.row for t in dataset.training_trees(batches, [1, 2])]
+    batches = {n: dataset.load_batch(n, export / f"batch-{n}", export / f"batch-{n}-labels") for n in (1, 2, 3)}
+    rows = [t.row for t in dataset.training_trees(batches, [1, 2, 3])]
     return model.train(rows)
 
 
@@ -570,14 +570,136 @@ def test_the_report_names_the_sessions_left_out(export):
         train.run(spec(export), None)
 
 
-def test_three_batches_give_three_folds_each_testing_an_unseen_batch(export):
-    make_session(export, "s3-attack", attack_recording(), batch=3)
-    make_session(export, "s3-benign", benign_recording(), batch=3, malicious=False)
-    make_session(export, "s3-heldout", attack_recording(), batch=3, pool="held-out", technique="T1053.005")
-    three = spec(export) + [(3, export / "batch-3", export / "batch-3-labels")]
-    report = train.run(three, None)
-    assert [(f["train_batches"], f["test_batch"]) for f in report["folds"]] == [([2, 3], 1), ([1, 3], 2), ([1, 2], 3)]
+def test_fewer_than_three_batches_cannot_choose_a_threshold_on_training_folds_only(export):
+    with pytest.raises(DatasetError, match="at least three"):
+        train.run(spec(export)[:2], None)
+
+
+# ---- counts with intervals, thresholds from training folds only, T1003.001 apart --------------
+
+
+def test_every_rate_is_shown_with_its_count_and_an_interval():
+    assert metrics.show(9, 15) == "9 of 15 (60%, 95% CI 35.7% to 80.2%)"
+    assert metrics.show(0, 44) == "0 of 44 (0%, 95% CI 0% to 8%)"
+    assert metrics.show(0, 0) == "0 of 0 (no cases)"
+    assert metrics.rate(5, 17)["k"] == 5 and metrics.rate(5, 17)["of"] == 17
+
+
+def test_the_threshold_is_the_lowest_grid_value_within_the_false_positive_cap():
+    benign = [0.1] * 97 + [0.55, 0.55, 0.55]  # 3 of 100 benign trees at 0.55: 3% at 0.5, 0% from 0.6
+    scores = benign + [0.9, 0.95]
+    flags = [False] * 100 + [True, True]
+    chosen = train.choose_threshold(scores, flags)
+    assert chosen["threshold"] == 0.6 and chosen["met_fpr_cap"] is True
+    assert chosen["chosen_on"] == {"negatives": 100, "false_positives": 0, "positives": 2, "true_positives": 2}
+    assert train.choose_threshold([0.1] * 100 + [0.9], [False] * 100 + [True])["threshold"] == 0.5
+    stuck = train.choose_threshold([0.99] * 50 + [0.99], [False] * 50 + [True])
+    assert stuck["threshold"] == 0.95 and stuck["met_fpr_cap"] is False  # nothing met it: the highest value
+    assert train.choose_threshold([0.9], [True])["met_fpr_cap"] is False  # no benign trees to measure on
+
+
+def test_a_threshold_never_depends_on_its_own_test_batch(export, tmp_path):
+    """The threshold for the fold that tests batch N is chosen inside the other batches. Remove
+    or change batch 1 entirely, and fold 1's choice does not move."""
+    import shutil
+    first = train.run(spec(export), None)
+    chosen = lambda r, i: {m: r["folds"][i]["models"][m]["threshold_chosen_on_training_folds"] for m in train.MODES}  # noqa: E731
+    changed = tmp_path / "changed"
+    for n in (2, 3):
+        shutil.copytree(export / f"batch-{n}", changed / f"batch-{n}")
+        shutil.copytree(export / f"batch-{n}-labels", changed / f"batch-{n}-labels")
+    make_session(changed, "x1-other", benign_recording(), batch=1, malicious=False)
+    make_session(changed, "x1-attack", attack_recording(), batch=1)
+    second = train.run(spec(changed), None)
+    assert chosen(first, 0) == chosen(second, 0)  # test batch 1: untouched by what batch 1 holds
+    for fold in first["folds"]:
+        for m in fold["models"].values():
+            assert m["threshold_chosen_on_training_folds"]["threshold"] in train.THRESHOLD_GRID
+
+
+def test_inner_selection_only_sees_the_training_batches(export, monkeypatch):
+    seen = []
+    real = train.inner_scores
+    monkeypatch.setattr(train, "inner_scores", lambda mode, batches, numbers: seen.append(list(numbers)) or real(mode, batches, numbers))
+    report = train.run(spec(export), None)
+    folds = [f["test_batch"] for f in report["folds"] for _ in train.MODES]
+    assert len(seen) == len(folds)
+    for numbers, test in zip(seen, folds):
+        assert test not in numbers and len(numbers) == 2
+
+
+def test_the_chosen_threshold_is_reported_next_to_the_fixed_ones(export):
+    report = train.run(spec(export), None)
     for fold in report["folds"]:
-        assert fold["test_batch"] not in fold["train_batches"]
-    held = {f["test_batch"]: f["models"]["snapshots"]["held_out_techniques"].get("positives", 0) for f in report["folds"]}
-    assert held == {1: 0, 2: 1, 3: 1}  # a held-out session is only ever on the test side
+        for m in fold["models"].values():
+            ths = [(t["threshold"], t["chosen_on_training_folds"]) for t in m["test"]["by_threshold"]]
+            chosen = m["threshold_chosen_on_training_folds"]["threshold"]
+            assert {0.5, 0.8, chosen} == {t for t, _ in ths}
+            assert [t for t, flag in ths if flag] == [chosen]
+    proposed = report["final_model"]["proposed_threshold"]
+    assert proposed["threshold"] in train.THRESHOLD_GRID and "not a test result" in proposed["note"]
+
+
+@pytest.fixture
+def with_lsass(export):
+    make_session(export, "s1-lsass", attack_recording(), batch=1, technique="T1003.001")
+    make_session(export, "s2-lsass", attack_recording(), batch=2, technique="T1003.001")
+    return export
+
+
+def test_t1003_attack_trees_are_set_apart_and_never_count_toward_recall(with_lsass):
+    batches = {n: trees_of(with_lsass, n) for n in (1, 2, 3)}
+    for n in (1, 2):
+        limited = dataset.limited_trees(batches[n])
+        ordinary, held_out = dataset.evaluation_trees(batches[n])
+        assert len(limited) == 1 and limited[0].row["technique"] == "T1003.001" and limited[0].positive
+        assert all(t.row["tree_id"] != limited[0].row["tree_id"] for t in ordinary + held_out)
+        # Its benign neighbours in the same session stay negatives.
+        assert any(t.row["session_id"] == f"s{n}-lsass" and not t.positive for t in ordinary)
+    # Still in training: only the recall figure leaves it out.
+    assert any(t.limited for t in dataset.training_trees(batches, [1, 2, 3]))
+    report = train.run(spec(with_lsass), None)
+    for fold in report["folds"]:
+        m = fold["models"]["snapshots"]
+        assert m["test"]["positives"] == 1 + 0  # the ordinary T1486 attack only, not the T1003.001 tree
+        lim = m["documented_limitation"]
+        assert lim["trees"] == (1 if fold["test_batch"] in (1, 2) else 0)
+    pooled = report["pooled"]["snapshots"]["documented_limitation"]
+    assert pooled["trees"] == 2 and len(pooled["scores"]) == 2
+    ordinary_attacks = sum(r["positive_trees"] for r in report["balance"] if r["group"] == "training")
+    assert ordinary_attacks == 3  # one ordinary attack tree per batch
+    assert all(r["documented_limitation_trees"] == (1 if r["batch"] in (1, 2) and r["group"] == "training" else 0)
+               for r in report["balance"])
+
+
+def test_the_text_report_lists_t1003_apart_and_sums_with_counts_and_intervals(with_lsass):
+    report = train.run(spec(with_lsass), None)
+    text = train.text_report(report)
+    assert "T1003.001 (documented limitation, NOT in recall)" in text
+    assert "Summed over the held-out batches" in text and "95% CI" in text
+    for mode in train.MODES:
+        pooled = report["pooled"][mode]
+        folds = [f["models"][mode]["test"] for f in report["folds"]]
+        at = lambda g, th: next(t for t in g["by_threshold"] if t["threshold"] == th)  # noqa: E731
+        assert pooled["test"]["fixed_0.8"]["tp"] == sum(at(g, 0.8)["tp"] for g in folds)
+        assert pooled["test"]["fixed_0.8"]["fp"] == sum(at(g, 0.8)["fp"] for g in folds)
+        assert pooled["test"]["fixed_0.8"]["recall"]["of"] == pooled["test"]["fixed_0.8"]["tp"] + pooled["test"]["fixed_0.8"]["fn"]
+
+
+def test_use_model_stays_off_by_default_and_policy_is_untouched():
+    import inspect
+    assert inspect.signature(run_session).parameters["use_model"].default is False
+    from backend.pipeline import __main__ as cli
+    assert "--use-model" in inspect.getsource(cli) and 'action="store_true"' in inspect.getsource(cli)
+    for name in ("rules/policy.yaml", "policy/engine.py", "policy/loader.py"):
+        assert "triage" not in (ROOT / name).read_text(encoding="utf-8").lower().replace("triage_", "")
+
+
+def test_the_comparison_tables_show_counts_with_intervals_for_each_report(export):
+    from triage import compare
+    first = train.run(spec(export), None)
+    second = train.run(spec(export), None)
+    text = compare.markdown({"A": first, "B": second})
+    assert "| A | B |" in text.replace("| complete model, summed over the held-out batches | A | B |", "| A | B |")
+    assert text.count("95% CI") > 20 and "NOT in recall" in text and "Threshold chosen on training folds" in text
+    assert "T1003.001 score (events)" in text

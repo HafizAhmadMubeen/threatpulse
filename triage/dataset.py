@@ -13,7 +13,7 @@ Rules, all from CLAUDE.md "ML rules" and PLANNING.md:
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from detection.timeline import parse_ts
@@ -23,6 +23,9 @@ log = logging.getLogger(__name__)
 
 HELD_OUT_TECHNIQUES = ("T1053.005", "T1685", "T1218.011")
 HELD_OUT_POOL = "held-out"
+# Documented limitation: LSA protection blocks the dump, so the test part has almost nothing
+# to see (2 events). It is reported on its own and never counts toward the model's recall.
+LIMITATION_TECHNIQUES = ("T1003.001",)
 
 
 # A snapshot is a tree as it looked part-way through: its events up to this fraction of the
@@ -41,10 +44,16 @@ class DatasetError(ValueError):
 class Tree:
     row: dict
     events: list[dict]
+    snapshot_cache: list | None = field(default=None, repr=False, compare=False)
 
     @property
     def positive(self) -> bool:
         return self.row["label"] == "malicious"
+
+    @property
+    def limited(self) -> bool:
+        """An attack tree of a technique with a documented limitation (T1003.001)."""
+        return self.positive and self.row["technique"] in LIMITATION_TECHNIQUES
 
     @property
     def held_out(self) -> bool:
@@ -113,9 +122,14 @@ def training_trees(batches: dict[int, list[Tree]], numbers: list[int]) -> list[T
 
 
 def evaluation_trees(batch: list[Tree]) -> tuple[list[Tree], list[Tree]]:
-    """(ordinary test trees, held-out technique trees) of one batch."""
-    usable = [t for t in batch if t.usable]
+    """(ordinary test trees, held-out technique trees) of one batch. The documented-limitation
+    attack trees are in neither: see limited_trees. Their benign neighbours stay negatives."""
+    usable = [t for t in batch if t.usable and not t.limited]
     return [t for t in usable if not t.held_out], [t for t in usable if t.held_out]
+
+
+def limited_trees(batch: list[Tree]) -> list[Tree]:
+    return [t for t in batch if t.usable and t.limited]
 
 
 def balance_table(batches: dict[int, list[Tree]]) -> list[dict]:
@@ -126,7 +140,8 @@ def balance_table(batches: dict[int, list[Tree]]) -> list[dict]:
                                ("held-out", [t for t in trees if t.held_out])):
             table.append({
                 "batch": number, "group": group,
-                "positive_trees": sum(t.positive and t.usable for t in members),
+                "positive_trees": sum(t.positive and t.usable and not t.limited for t in members),
+                "documented_limitation_trees": sum(t.limited and t.usable for t in members),
                 "negative_trees": sum((not t.positive) and t.usable for t in members),
                 "unobserved_start_dropped": sum(not t.usable for t in members),
             })
@@ -141,6 +156,8 @@ def snapshot_rows(tree: Tree) -> list[tuple[float, dict]]:
     Cuts are by time, because that is how a tree grows while an alert waits for its
     verdict. Two cuts that keep the same events are one snapshot (the later fraction is
     kept). Built from the tree's own events: no label and no harness is read here."""
+    if tree.snapshot_cache is not None:
+        return tree.snapshot_cache
     ordered = sorted(tree.events, key=order_key)
     if not ordered:
         return []
@@ -159,6 +176,7 @@ def snapshot_rows(tree: Tree) -> list[tuple[float, dict]]:
         features = tree_feature_row(ordered[:count])
         if features is not None:
             rows.append((fraction, {**tree.row, **features, "n_events": count}))
+    tree.snapshot_cache = rows
     return rows
 
 
