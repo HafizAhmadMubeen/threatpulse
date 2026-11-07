@@ -361,3 +361,7 @@ Apply after the earlier branches merge. **All results are preliminary: 2 of 11 b
 1. **PLANNING.md Section 10, Decided:** `| Pools left out of ML | triage/dataset.py skips every session whose pool is in excluded_from_ml_pools in agent/config/recording_tests.json (today fim-test-only), for training and evaluation, and reports them by name. The list comes from that file only. A missing file, a missing key, or an unknown pool stops the run |`.
 2. **For Track A:** `recording_tests.json` is read by `python -m triage.train --recording-tests PATH` (default `agent/config/recording_tests.json`). The key `excluded_from_ml_pools` is required. If another pool is ever added to the list, the loader needs no change. If a new pool is used and not listed, the run stops with its name.
 3. **For `detection/rule_eval.py`:** it does not skip excluded pools. It has only seen batches 1 to 4, which contain none. Add the same skip before pointing it at a batch 0 folder.
+
+## Added on `track-b/training` (rule_eval skips excluded pools too)
+1. **Supersedes item 3 of "pools left out of ML":** `detection/rule_eval.py` now skips `excluded_from_ml_pools` sessions with the loader's own code, lists them by name, and stops on a missing file or key, an unreadable pool, or an unknown pool. Pass `--recording-tests PATH`.
+2. **PLANNING.md Section 10, Decided (same row):** the rule-layer evaluation and the ML loader share one implementation of the pool skip, so they cannot disagree about which sessions count.

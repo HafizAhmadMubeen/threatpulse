@@ -108,6 +108,17 @@ def session_pool(folder: Path) -> str:
     return pool
 
 
+def require_known_pool(folder: Path) -> str:
+    """The session's pool, if it is a known one. Anything else stops the run: a pool that is
+    neither known nor listed in excluded_from_ml_pools must never be loaded as ordinary data."""
+    pool = session_pool(folder)
+    if pool not in KNOWN_POOLS:
+        raise DatasetError(
+            f"{folder.name}: pool {pool!r} is neither a known pool {KNOWN_POOLS} nor listed in "
+            "excluded_from_ml_pools, so it is not loaded")
+    return pool
+
+
 def all_session_folders(sessions_dir: Path) -> list[Path]:
     return sorted(p for p in sessions_dir.iterdir() if (p / "events.jsonl").is_file())
 
@@ -162,11 +173,7 @@ def load_batch(number: int, sessions_dir: Path, labels_dir: Path, only_labelled:
                excluded_pools: tuple[str, ...] = ()) -> list[Tree]:
     trees: list[Tree] = []
     for folder in session_folders(sessions_dir, labels_dir, only_labelled, excluded_pools):
-        pool = session_pool(folder)
-        if pool not in KNOWN_POOLS:
-            raise DatasetError(
-                f"{folder.name}: pool {pool!r} is neither a known pool {KNOWN_POOLS} nor listed in "
-                "excluded_from_ml_pools, so it is not loaded")
+        require_known_pool(folder)
         try:
             pairs = extract_session_trees(folder, labels_dir, from_start=True)
         except SessionError as error:

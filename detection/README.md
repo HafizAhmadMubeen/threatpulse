@@ -203,11 +203,13 @@ uv run pytest tests/test_behaviour.py
 `python -m detection.rule_eval` replays every labelled session through a fresh `match_rules` engine and counts what fires. It changes no rule, threshold, session or labels folder (a test checks the rule files byte for byte). It reads `--batch N SESSIONS LABELS` the way `triage.train` does, with `--only-labelled` for batch 3's second run.
 
 ```bash
-uv run python -m detection.rule_eval --only-labelled \
+uv run python -m detection.rule_eval --only-labelled --recording-tests recording_tests.json \
   --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
   --batch 3 $E/batch-03 $E/batch-03-labels --batch 4 $E/batch-04 $E/batch-04-labels \
   --out data/runs/rule-eval-1234
 ```
+
+**Pools left out.** `rule_eval` skips the sessions of every pool in `excluded_from_ml_pools` (today `fim-test-only`) in Track A's `agent/config/recording_tests.json`, the same way `triage.dataset` does and with the same code: skipped before anything else is read (no labels needed), listed by name with their pool in the report (`## Sessions left out on purpose`, and `sessions_left_out_for_an_excluded_pool` in the JSON together with the file's SHA-256), and never replayed through the rules. The list comes from the file only. The run stops if the file or its key is missing, if a session's pool cannot be read, or if a pool is neither known (`training-technique`, `held-out`, `unassigned`) nor listed. Until Track A's branch is merged, pass a copy with `--recording-tests PATH`; the command below needs it.
 
 How things are counted:
 - An attack session's alert is *in the test part* when most of its evidence events are labelled `part=test`. Harness alerts (the wrapper that runs a test) and background alerts are counted apart and are never detections.

@@ -18,12 +18,19 @@ What counts:
   end_utc). Alerts before start_utc (sensor start-up and warm-up) or after end_utc are
   counted apart.
 
+POOLS LEFT OUT. A session whose pool is listed in `excluded_from_ml_pools` in
+agent/config/recording_tests.json (today: fim-test-only) is skipped the same way triage.dataset
+skips it, with the same code: before anything else is read, no labels needed, and listed by
+name in the report. The file and its key are required, and a pool that is neither known nor
+excluded stops the run. The list comes from the file and from nowhere else.
+
 IN-SAMPLE. Which batches each rule was written or tuned against is in RULE_HISTORY and
 BATCH_STATUS below, taken from git and from the docs, and printed with every report.
 """
 
 import argparse
 import csv
+import hashlib
 import json
 import sys
 from collections import Counter, defaultdict
@@ -32,6 +39,9 @@ from pathlib import Path
 from contracts.validate_samples import load_validators
 from detection.behaviour import RuleEngine, load_rules, sort_events
 from detection.timeline import parse_ts, read_jsonl
+from triage.dataset import (DEFAULT_RECORDING_TESTS, DatasetError, load_excluded_pools, pool_excluded_sessions,
+                            require_known_pool)
+from triage.dataset import session_folders as dataset_session_folders
 from triage.metrics import show
 
 
@@ -89,13 +99,6 @@ def part_of(row: dict | None) -> str:
     return row.get("part") or row["label"]
 
 
-def session_folders(sessions_dir: Path, labels_dir: Path, only_labelled: bool) -> list[Path]:
-    folders = sorted(p for p in sessions_dir.iterdir() if (p / "events.jsonl").is_file())
-    if only_labelled:
-        folders = [p for p in folders if (labels_dir / p.name / "labels.csv").is_file()]
-    return folders
-
-
 def seconds(stamp: str) -> float:
     return parse_ts(stamp).timestamp()
 
@@ -137,14 +140,22 @@ def evaluate_session(folder: Path, labels_dir: Path, batch: int) -> dict:
             "skipped_invalid_events": skipped, "rejected": engine.rejected, "alerts": rows}
 
 
-def evaluate(spec: list[tuple[int, Path, Path]], only_labelled: bool) -> dict:
-    sessions = []
+def evaluate(spec: list[tuple[int, Path, Path]], only_labelled: bool, excluded_pools: tuple[str, ...] = (),
+             excluded_source: dict | None = None) -> dict:
+    """`excluded_pools` comes from recording_tests.json (the CLI always supplies it). Programs that
+    call this directly pass it themselves: the default of none is only for tests. Whatever is
+    passed, a session whose pool is neither known nor excluded stops the run."""
+    sessions, left_out = [], {}
     for batch, sessions_dir, labels_dir in spec:
-        for folder in session_folders(sessions_dir, labels_dir, only_labelled):
+        left_out[str(batch)] = pool_excluded_sessions(sessions_dir, excluded_pools)
+        for folder in dataset_session_folders(sessions_dir, labels_dir, only_labelled, excluded_pools):
+            require_known_pool(folder)
             sessions.append(evaluate_session(folder, labels_dir, batch))
     if not sessions:
         raise RuleEvalError("no sessions")
-    return {"rules": {r.id: list(r.techniques) for r in load_rules()}, "history": RULE_HISTORY,
+    return {"excluded_from_ml_pools": list(excluded_pools), "excluded_pools_source": excluded_source,
+            "sessions_left_out_for_an_excluded_pool": {b: items for b, items in left_out.items() if items},
+            "rules": {r.id: list(r.techniques) for r in load_rules()}, "history": RULE_HISTORY,
             "batch_status": {str(k): v for k, v in BATCH_STATUS.items()}, "sessions": sessions,
             "summary": summarise(sessions)}
 
@@ -243,6 +254,18 @@ def summarise(sessions: list[dict]) -> dict:
 # ---- text ----------------------------------------------------------------------------------
 
 
+def left_out_lines(result: dict) -> list[str]:
+    """The sessions skipped on purpose, by name, with their pool."""
+    pools = result.get("excluded_from_ml_pools", [])
+    lines = [f"Pools left out (excluded_from_ml_pools): {pools or 'none given'}."]
+    for batch, items in result.get("sessions_left_out_for_an_excluded_pool", {}).items():
+        lines.append(f"- Batch {batch}: {len(items)} session(s) left out: "
+                     + ", ".join(f"{i['session']} (pool {i['pool']})" for i in items))
+    if len(lines) == 1 and pools:
+        lines.append("- No session of those pools was in the batches given.")
+    return lines
+
+
 def markdown(result: dict) -> str:
     sm, history = result["summary"], result["history"]
     lines = ["## Where each rule comes from (in-sample or not)", "",
@@ -250,6 +273,7 @@ def markdown(result: dict) -> str:
              f"- Thresholds: {history['thresholds']}.",
              f"- Engine change made after data: {history['engine_change_after_data']['commit']}: "
              f"{history['engine_change_after_data']['what']}. Affects {', '.join(history['engine_change_after_data']['affects'])}.", ""]
+    lines += ["## Sessions left out on purpose", ""] + left_out_lines(result) + [""]
     lines += ["| Batch | Status for the rules |", "|---|---|"] + [f"| {b} | {t} |" for b, t in result["batch_status"].items()]
     lines += ["", "## Per technique: which rules fired in the test part", "",
               "| Technique | Detected (a rule for it fired in the test part) | Batches 3 and 4 only (out-of-sample) | Rules fired in the test part (alerts) | Harness alerts | Background alerts |",
@@ -295,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate the behaviour rules on recorded batches (read-only).")
     parser.add_argument("--batch", nargs=3, action="append", metavar=("NUMBER", "SESSIONS", "LABELS"), required=True)
     parser.add_argument("--only-labelled", action="store_true")
+    parser.add_argument("--recording-tests", type=Path, default=DEFAULT_RECORDING_TESTS,
+                        help="Track A's recording_tests.json. Its excluded_from_ml_pools lists pools whose sessions are "
+                             "skipped (today: fim-test-only). The file and the key are required, and the run stops without them")
     parser.add_argument("--out", type=Path, required=True, help="where rule_eval.json and rule_eval.md go (not inside an input)")
     args = parser.parse_args(argv)
     spec = [(int(n), Path(s), Path(l)) for n, s, l in args.batch]
@@ -304,8 +331,10 @@ def main(argv: list[str] | None = None) -> int:
             if out == folder or folder in out.parents:
                 parser.error(f"--out must not be inside an input folder: {folder}")
     try:
-        result = evaluate(spec, args.only_labelled)
-    except RuleEvalError as error:
+        pools = load_excluded_pools(args.recording_tests)
+        source = {"path": str(args.recording_tests), "sha256": hashlib.sha256(args.recording_tests.read_bytes()).hexdigest()}
+        result = evaluate(spec, args.only_labelled, pools, source)
+    except (RuleEvalError, DatasetError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     out.mkdir(parents=True, exist_ok=True)

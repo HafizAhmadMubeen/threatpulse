@@ -1,6 +1,7 @@
 """The rule evaluator: read-only, rule-neutral, and honest about what is in-sample."""
 
 import hashlib
+import inspect
 import json
 import shutil
 import subprocess
@@ -10,6 +11,8 @@ import pytest
 
 from detection import rule_eval
 from detection.behaviour import load_rules
+from triage import dataset
+from triage.dataset import DatasetError
 from tests.event_builder import P, Recording
 from tests.test_features import attack_recording
 from tests.test_training import benign_recording, make_session
@@ -91,8 +94,11 @@ def test_fim_alerts_are_placed_by_the_test_window_since_they_have_no_labels(expo
 def test_it_changes_no_rule_and_no_input(export, tmp_path_factory):
     before, inputs = rules_fingerprint(), {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in export.rglob("*") if p.is_file()}
     out = tmp_path_factory.mktemp("rule-eval-out")
+    plan = tmp_path_factory.mktemp("plan") / "recording_tests.json"
+    plan.write_text(json.dumps({"tests": [], "excluded_from_ml_pools": ["fim-test-only"]}), encoding="utf-8")
     assert rule_eval.main(["--batch", "1", str(export / "batch-1"), str(export / "batch-1-labels"),
-                           "--batch", "3", str(export / "batch-3"), str(export / "batch-3-labels"), "--out", str(out)]) == 0
+                           "--batch", "3", str(export / "batch-3"), str(export / "batch-3-labels"),
+                           "--recording-tests", str(plan), "--out", str(out)]) == 0
     assert rules_fingerprint() == before
     assert inputs == {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in export.rglob("*") if p.is_file()}
     assert json.loads((out / "rule_eval.json").read_text(encoding="utf-8"))["summary"]["attack_sessions"] == 2
@@ -161,3 +167,115 @@ def test_every_rule_states_what_it_was_written_or_tuned_against(export):
     assert "guess" in per_rule["R-T1486-001"]["written_or_tuned_against"]
     text = rule_eval.markdown(result)
     assert "Written or tuned against" in text and "Batches 3 and 4 only (out-of-sample)" in text
+
+
+# ---- pools listed in excluded_from_ml_pools are skipped, the same way as in the loader ----------
+
+FIM_POOL = ("fim-test-only",)
+
+
+def add_fim_session(export: Path, name="s1-fim", batch=1, labels=True, pool="fim-test-only") -> None:
+    """An attack-looking session of a pool that is left out. If the rules ever saw it they would fire."""
+    make_session(export, name, attack_recording(), batch=batch, pool=pool, technique="T1547.001")
+    if not labels:
+        (export / f"batch-{batch}-labels" / name / "labels.csv").unlink()
+
+
+def plan_file(tmp_path: Path, pools: object) -> Path:
+    path = tmp_path / "recording_tests.json"
+    path.write_text(json.dumps({"tests": [], "excluded_from_ml_pools": pools}), encoding="utf-8")
+    return path
+
+
+def test_an_excluded_pool_session_is_skipped_by_name_and_moves_no_count(export):
+    reference = rule_eval.evaluate(spec(export), only_labelled=False)
+    add_fim_session(export)
+    result = rule_eval.evaluate(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+    assert result["sessions_left_out_for_an_excluded_pool"] == {"1": [{"session": "s1-fim", "pool": "fim-test-only"}]}
+    assert result["excluded_from_ml_pools"] == ["fim-test-only"]
+    assert [s["session_id"] for s in result["sessions"]] == [s["session_id"] for s in reference["sessions"]]
+    assert result["summary"] == reference["summary"]  # not one count, rule or benign session changed
+
+
+def test_an_excluded_session_needs_no_labels_and_no_rule_ever_sees_it(export, monkeypatch):
+    add_fim_session(export, labels=False)
+    seen = []
+    real = rule_eval.evaluate_session
+    monkeypatch.setattr(rule_eval, "evaluate_session", lambda folder, labels, batch: seen.append(folder.name) or real(folder, labels, batch))
+    for only_labelled in (False, True):
+        result = rule_eval.evaluate(spec(export), only_labelled=only_labelled, excluded_pools=FIM_POOL)
+        assert "s1-fim" not in {s["session_id"] for s in result["sessions"]}
+    assert "s1-fim" not in seen and seen
+
+
+def test_without_the_exclusion_such_a_session_stops_the_run(export):
+    add_fim_session(export)
+    with pytest.raises(DatasetError, match=r"pool 'fim-test-only' is neither a known pool"):
+        rule_eval.evaluate(spec(export), only_labelled=False)
+    make_session(export, "s3-odd", benign_recording(), batch=3, pool="some-new-pool", malicious=False)
+    with pytest.raises(DatasetError, match="some-new-pool"):
+        rule_eval.evaluate(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+
+
+def test_the_pool_list_is_the_files_not_the_codes(export):
+    """Any pool the file lists is skipped, and one it does not list stops the run, whatever the name."""
+    add_fim_session(export, name="s1-other", pool="some-new-pool")
+    result = rule_eval.evaluate(spec(export), only_labelled=False, excluded_pools=("some-new-pool",))
+    assert result["sessions_left_out_for_an_excluded_pool"]["1"] == [{"session": "s1-other", "pool": "some-new-pool"}]
+    add_fim_session(export)  # fim-test-only is not in this file's list now
+    with pytest.raises(DatasetError, match="fim-test-only"):
+        rule_eval.evaluate(spec(export), only_labelled=False, excluded_pools=("some-new-pool",))
+    logic = inspect.getsource(rule_eval.evaluate) + inspect.getsource(rule_eval.left_out_lines)
+    assert "fim-test-only" not in logic
+
+
+def test_it_shares_the_loaders_code_so_the_two_cannot_drift():
+    assert rule_eval.load_excluded_pools is dataset.load_excluded_pools
+    assert rule_eval.pool_excluded_sessions is dataset.pool_excluded_sessions
+    assert rule_eval.require_known_pool is dataset.require_known_pool
+    assert rule_eval.dataset_session_folders is dataset.session_folders
+    assert rule_eval.DEFAULT_RECORDING_TESTS == dataset.DEFAULT_RECORDING_TESTS
+
+
+def test_an_unreadable_session_pool_stops_the_run(export):
+    (export / "batch-1" / "s1-attack" / "session.json").write_text("{broken", encoding="utf-8")
+    with pytest.raises(DatasetError, match="cannot read the pool"):
+        rule_eval.evaluate(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+
+
+def test_the_report_lists_the_skipped_sessions_by_name(export):
+    add_fim_session(export)
+    result = rule_eval.evaluate(spec(export), only_labelled=False, excluded_pools=FIM_POOL,
+                                excluded_source={"path": "recording_tests.json", "sha256": "0" * 64})
+    text = rule_eval.markdown(result)
+    assert "## Sessions left out on purpose" in text
+    assert "Batch 1: 1 session(s) left out: s1-fim (pool fim-test-only)" in text
+    assert result["excluded_pools_source"]["sha256"] == "0" * 64
+    quiet = rule_eval.evaluate(spec(export, (3,)), only_labelled=False, excluded_pools=FIM_POOL)
+    assert "No session of those pools was in the batches given." in rule_eval.markdown(quiet)
+    assert "none given" in rule_eval.markdown(rule_eval.evaluate(spec(export, (3,)), only_labelled=False))
+
+
+def test_the_cli_reads_the_list_writes_the_names_and_stops_without_a_usable_file(export, tmp_path, tmp_path_factory, capsys):
+    add_fim_session(export)
+    batches = ["--batch", "1", str(export / "batch-1"), str(export / "batch-1-labels"),
+               "--batch", "3", str(export / "batch-3"), str(export / "batch-3-labels")]
+    plan = plan_file(tmp_path_factory.mktemp("plan"), ["fim-test-only"])
+    out = tmp_path_factory.mktemp("out")
+    assert rule_eval.main([*batches, "--recording-tests", str(plan), "--out", str(out)]) == 0
+    saved = json.loads((out / "rule_eval.json").read_text(encoding="utf-8"))
+    assert saved["sessions_left_out_for_an_excluded_pool"] == {"1": [{"session": "s1-fim", "pool": "fim-test-only"}]}
+    assert saved["excluded_pools_source"] == {"path": str(plan), "sha256": hashlib.sha256(plan.read_bytes()).hexdigest()}
+    assert "s1-fim (pool fim-test-only)" in (out / "rule_eval.md").read_text(encoding="utf-8")
+    # No file, no key, or an unknown pool: it stops and writes no report.
+    other = tmp_path_factory.mktemp("o2")
+    assert rule_eval.main([*batches, "--recording-tests", str(tmp_path / "missing.json"), "--out", str(other)]) == 1
+    assert "track-a/fim-session" in capsys.readouterr().err
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({"tests": []}), encoding="utf-8")
+    assert rule_eval.main([*batches, "--recording-tests", str(old), "--out", str(other)]) == 1
+    assert "no excluded_from_ml_pools" in capsys.readouterr().err
+    empty = plan_file(tmp_path_factory.mktemp("plan2"), [])  # lists nothing, so fim-test-only is an unknown pool
+    assert rule_eval.main([*batches, "--recording-tests", str(empty), "--out", str(other)]) == 1
+    assert "fim-test-only" in capsys.readouterr().err
+    assert not (other / "rule_eval.json").exists()
