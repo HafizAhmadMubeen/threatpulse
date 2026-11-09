@@ -70,12 +70,18 @@ The sections above describe the full design. The current release is the part of 
 - **All four scanner generations.** Generation 2 rests on `pefile` heuristics and File Integrity Monitoring.
 - **A recorded dataset** of 46 sessions from our own lab VM: batches 1 to 6, with batch 6 as the NAT batch.
 - **Implemented and verified in the VM:** the agent, File Integrity Monitoring, and the recorder and labeller.
-- **Implemented and verified on the recordings:** the behaviour rules and the XGBoost triage model (preliminary), evaluated leave-one-batch-out.
+- **Implemented and verified on the recordings:** the behaviour rules and the XGBoost triage model (preliminary), evaluated leave-one-batch-out over all six batches.
 - **Implemented and unit-tested:** the signature and heuristic layers, the entropy detector, the policy engine, the enforcement actions with their undo, the ATT&CK retrieval, technique-ID validator and prompt template, the replay pipeline, the API and the dashboard. Their checks in the VM are still to run: EICAR and UPX, entropy, the enforcement test, and live zone demos for ransomware and persistence.
 - **A dashboard demo** from replayed recorded sessions.
 - **An evaluation** with leave-one-batch-out, a per-technique table, the false-positive rate, rule-layer results, latency and limitations with counts. The held-out evaluation covers two techniques, because T1685 was not recorded.
 
-**Documented limitations:** T1003.001 and T1105. In both, the recorded test parts hold no technique behaviour. With LSA protection on, the sensors record no access to LSASS ([PLANNING.md](PLANNING.md) Section 4.3), and in both T1105 sessions no process, file or connection follows the `cmd.exe` that starts the download.
+**Results so far (batches 1 to 6, preliminary, with 95% intervals in [PLANNING.md](PLANNING.md) Section 8.3):**
+- **Triage model, at the 0.80 threshold:** 20 of 21 ordinary attacks caught and 5 of 661 benign trees flagged (complete model), 6 of 661 for the snapshots model. Held-out techniques: 5 of 6 caught by the complete model and 3 of 6 by the snapshots model (6 of 6 at 0.50), with 0 of 19 held-out benign trees flagged.
+- **Behaviour rules:** a rule for the technique fired in 31 of 34 attack sessions. 5 of 12 benign sessions produced an alert: `R-T1486-001` fires on all 3 zip-extraction sessions, and Edge rewriting its autolaunch Run value raised the persistence rules in the batch 5 normal-use session.
+- **Alert-time scoring is worse than the evaluation:** 18 of 32 malicious-session alerts at or above 0.80 (snapshots model) against 25 of 26 on four batches, so `--use-model` stays off.
+- **The `windows-update` session is an outlier** (one tree of 741,055 events) and was not ablated.
+
+**Documented limitations:** T1003.001 and T1105 (the model flags 0 of 5 and 0 of 2, and they are not counted in recall; the rules caught 4 of 5 and 0 of 2). In both, the recorded test parts hold no technique behaviour. With LSA protection on, the sensors record no access to LSASS ([PLANNING.md](PLANNING.md) Section 4.3), and in both T1105 sessions no process, file or connection follows the `cmd.exe` that starts the download.
 
 **Future work:** batch 9 (T1685) and further recording batches, the FIM evidence session (ready on a branch), the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub, and the provider is decided), backend API authentication, a full live end-to-end integration, and a demonstration of the LSASS zone.
 

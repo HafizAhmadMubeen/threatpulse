@@ -52,9 +52,9 @@ Everything above is the full design, and the design text stays as it is. The cur
 | Agent (ETW, Sysmon, JSONL), recorder and labeller | Implemented | Verified in the VM: schema checks, event-loss counters and path coverage on every recording. 46 sessions were recorded, with 0 invalid events |
 | FIM (persistence zone) | Implemented | Verified in the VM: 12 of 12 checks on the event-driven path, and the 60-second compare. Run, RunOnce and RunOnceEx changes appear in the recordings. No hosts-file or Startup-folder change has been recorded |
 | Hash list, YARA and `pefile` heuristics (`scan_file`) | Implemented | Unit-tested, with the test-marker file on the host. The EICAR and UPX check in the VM has not been run |
-| Behaviour rules and `match_rules` | Implemented | Verified on recordings: Track B's read-only replay over batches 1 to 4. Not run live |
+| Behaviour rules and `match_rules` | Implemented | Verified on recordings: Track B's read-only replay over batches 1 to 6 (results below). No rule was changed after the first recordings. Not run live |
 | Ransomware entropy rule `R-T1486-002` | Implemented | Unit-tested, and replayed without reading files. The VM check with `--read-files` has not been run |
-| XGBoost triage and `score_process` | Implemented, preliminary | Verified on recordings: leave-one-batch-out over batches 1 to 4. Batches 5 and 6 are labelled and not yet in the published evaluation. Not run live |
+| XGBoost triage and `score_process` | Implemented, preliminary | Verified on recordings: leave-one-batch-out over batches 1 to 6 (results below). Scoring at alert time is worse than in the evaluation, so `--use-model` stays off. Not run live |
 | ABAC policy engine (`decide`) | Implemented | Unit-tested rule by rule, with a test that `policy/` imports nothing from the RAG or LLM code |
 | Enforcement (`execute`, undo, VM guard, never-suspend re-check) | Implemented on the branch `track-a/enforcement` | Unit-tested against a fake Windows API only. `agent/tools/vm_test_enforcement.ps1` is written and has not been run |
 | ATT&CK retrieval, prompt template and technique-ID validator | Implemented | Unit-tested. The tests that use the downloaded ATT&CK data run after the fetch and index commands |
@@ -95,6 +95,16 @@ Everything above is the full design, and the design text stays as it is. The cur
 - **T1105 is a documented limitation.** Both recorded sessions (2 runs, both in batch 6) have a test part of 2 events, the start and stop of `cmd.exe`. No process started under it, no event names the downloaded file, and no connection to the download host is recorded, so the test parts hold no technique behaviour. The cause is not established. A Defender block is consistent with the data, and the diagnostic that would settle it is future work.
 - **Four sessions use NAT,** all in batch 6: both T1105 runs and 2 of the 12 benign sessions. T1105 is the only attack technique recorded on NAT (spurious correlation, Arp et al. 2022).
 - **One session dominates batch 6.** The `windows-update` session holds 1,180,365 of the batch's 1,325,756 events, so Track B weights by process tree and not by event.
+
+**Results on the recordings (batches 1 to 6).** Track B's final run, from `triage/README.md` and `detection/README.md`. Every rate is a count with its 95% interval, and the tables are in Section 8.3. The attack trees are the same scripted tests run again in every batch, so the intervals do not treat them as independent draws, and the results are preliminary.
+- **Ordinary attacks caught.** 20 of 21 attack trees at the 0.80 threshold (95.2%, 95% CI 77.3% to 99.2%), by both the complete model and the snapshots model. At 0.50 the snapshots model catches 21 of 21. The miss is the T1486 tree of batch 2.
+- **Benign trees flagged.** 5 of 661 for the complete model (0.8%, 95% CI 0.3% to 1.8%) and 6 of 661 for the snapshots model (0.9%, 95% CI 0.4% to 2%), at 0.80. In batch 6 the complete model flags 5 of 122, all in the install-uninstall session.
+- **Held-out techniques** (T1053.005 and T1218.011, 6 trees). The complete model catches 5 of 6 at 0.80 (83.3%, 95% CI 43.6% to 97%) and the snapshots model 3 of 6, and 6 of 6 at 0.50. No held-out benign tree is flagged (0 of 19).
+- **T1003.001 and T1105 are documented limitations.** The model flags 0 of 5 and 0 of 2. Neither is counted in recall.
+- **Behaviour rules.** A rule written for the technique fired in 31 of 34 attack sessions (91.2%, 95% CI 77% to 97%): T1003.001 4 of 5 (by the command-line rule `R-T1003-002`), T1105 0 of 2, and every other technique in full. 5 of 12 benign sessions produced an alert.
+- **False positives of the rules.** `R-T1486-001` fires on all 3 zip-extraction sessions recorded. In the normal-use session of batch 5, Edge rewriting its autolaunch Run value raised `R-FIM-PERSISTENCE` and `R-T1547-001`.
+- **Alert-time scoring is worse.** Replaying the pipeline, 18 of 32 malicious-session alerts at or above 0.80 for the snapshots model (56.2%) and 26 of 32 for the complete model (81.2%), against 25 of 26 on four batches. `--use-model` stays off.
+- **The `windows-update` session was not ablated.** It gives 27 of the 661 benign trees (4.1%) and 64 of the 1,310 snapshot rows (4.9%), and holds one tree of 741,055 events. No run left it out, so its effect on the model is not measured.
 
 ## 3. Lab and device safety rules
 
@@ -574,6 +584,41 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | Report accuracy | % of reports with only valid technique IDs |
 | Injection resistance | Enforcement decisions identical with and without injected text |
 | Limitations with counts | For each limitation, the number of sessions or events it affects, for example the 2-event test part in 4 of the 5 T1003.001 sessions and the 56 events of PowerShell start-up in the fifth (Section 4.3), and the session counts in Section 2.1 |
+
+**Results so far (batches 1 to 6, preliminary).** Track B's final run, summed over the held-out batches. Each batch was scored by a model that never saw it, so a sum is not one model's result. The 0.80 threshold is not tuned. The sources are `triage/README.md` and `detection/README.md`.
+
+| Model, at the 0.80 threshold | Complete model | Snapshots model |
+|---|---|---|
+| Ordinary attacks caught | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) |
+| Ordinary attacks caught, at 0.50 | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) | 21 of 21 (100%, 95% CI 84.5% to 100%) |
+| Benign trees flagged | 5 of 661 (0.8%, 95% CI 0.3% to 1.8%) | 6 of 661 (0.9%, 95% CI 0.4% to 2%) |
+| Held-out attacks caught (T1053.005, T1218.011) | 5 of 6 (83.3%, 95% CI 43.6% to 97%) | 3 of 6 (50%, 95% CI 18.8% to 81.2%), and 6 of 6 at 0.50 |
+| Held-out benign trees flagged | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| T1003.001, a documented limitation (not in recall) | 0 of 5 flagged | 0 of 5 flagged |
+| T1105, a documented limitation (not in recall) | 0 of 2 flagged | 0 of 2 flagged |
+| Malicious-session alerts at or above 0.80 when they fire, in the pipeline replay | 26 of 32 (81.2%, 95% CI 64.7% to 91.1%) | 18 of 32 (56.2%, 95% CI 39.3% to 71.8%) |
+| The same, on four batches | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) |
+
+- **Ordinary attacks.** 21 trees. The one miss at 0.80 is the T1486 tree of batch 2 (complete model 0.21, snapshots model 0.71). Batch 2 was the weakest fold in every earlier run too.
+- **Benign trees.** 661 across the six test folds. In batch 6 the complete model flags 5 of 122 (4.1%, 95% CI 1.8% to 9.2%), all in the install-uninstall session, and the snapshots model flags 1 of 122.
+- **Held-out.** The snapshots model's `T1218.011` scores are 0.79, 0.50 and 0.64, just under the line, so this is a threshold effect on three trees. `T1053.005` is caught every time.
+- **T1003.001 and T1105** are listed apart because the recorded test parts hold no technique behaviour: 0 of 5 and 0 of 2 are flagged at 0.50 or 0.80. For T1105 the cause of the empty test part is not established (Section 2.1).
+- **Alert time.** The replayed tree still holds the wrapper that runs each test, which training left out, and the drop was not investigated. The policy keeps 0.80, and `--use-model` stays off.
+- **The `windows-update` session is an outlier that was not ablated.** One tree of 741,055 events, against 77,472 for the largest tree among the other four biggest contributors. It was not replayed at alert time (a session over 400,000 events is not replayed). In the fold that tests batch 6 that tree is not among the highest-scoring benign trees. No run left the session out, so this is its share of the rows and one fold, not a controlled test.
+
+| Behaviour rules, batches 1 to 6 | Result |
+|---|---|
+| Attack sessions where a rule for the technique fired in the test part | 31 of 34 (91.2%, 95% CI 77% to 97%) |
+| The same, batches 3 to 6 (out of sample) | 18 of 20 (90%, 95% CI 69.9% to 97.2%) |
+| The same, batches 5 and 6 (never seen before the final run) | 6 of 8 (75%, 95% CI 40.9% to 92.9%), and 6 of 6 without T1105 |
+| T1003.001 | 4 of 5 (80%, 95% CI 37.6% to 96.4%), all by `R-T1003-002`. `R-T1003-001` (an LSASS read) fired in 0 of 5 |
+| T1105 | 0 of 2. `R-T1105-001` has not been tested, because the test part holds no connection and no file write |
+| Benign sessions with any alert | 5 of 12 (41.7%, 95% CI 19.3% to 68%), and 2 of 4 in batches 5 and 6 |
+| `R-T1486-001` on zip extraction | 3 of 3 zip-extraction sessions (batches 2, 3 and 5). No count or window separates it from the attack script. The entropy rule `R-T1486-002` is meant to address this and can only be checked in the VM |
+| Edge autolaunch Run value | `R-FIM-PERSISTENCE` and `R-T1547-001` fired in 2 of 12 benign sessions. In the normal-use session of batch 5 the cause is Edge rewriting its autolaunch Run value |
+| No evidence yet | `R-T1685-001` (no T1685 session), `R-FIM-HOSTS` (no hosts-file change) and `R-T1547-002` (0 of 11: no recorded test uses a Startup folder) |
+
+The attack tests are the same scripts run again in every batch, so these results show that the rules fire on those behaviours again. They do not show that the rules catch a different implementation of a technique, and none was tried against evasion.
 
 ## 9. Risks and fallbacks
 

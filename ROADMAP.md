@@ -15,6 +15,8 @@ The tasks below are the full plan. The current release is the subset in [PLANNIN
 | **C** | Backend, ATT&CK vector DB, retrieval, prompt template, report validator, the dashboard demo from replayed sessions, the enforcement half of the prompt-injection demo, the demo video | The LLM report writer (`write_report`), connecting an approval to an action, backend API authentication |
 | **All** | Verification in the VM (EICAR and UPX, entropy, enforcement test), the evaluation report, the design review | A full live end-to-end integration |
 
+**Evaluation status.** Track B has run the evaluation over batches 1 to 6 (preliminary; counts and 95% intervals in [PLANNING.md Section 8.3](PLANNING.md#83-metrics)). At the 0.80 threshold the model catches 20 of 21 ordinary attacks and flags 5 of 661 benign trees (complete model), and catches 5 of 6 held-out attacks (3 of 6 for the snapshots model, 6 of 6 at 0.50). T1003.001 and T1105 are documented limitations (0 of 5 and 0 of 2 flagged by the model). The behaviour rules fired in 31 of 34 attack sessions, `R-T1486-001` fires on all 3 zip-extraction sessions, and Edge's autolaunch Run value raised the persistence rules in the batch 5 normal-use session. Scoring at alert time is worse (18 of 32 against 25 of 26 on four batches), so `--use-model` stays off. The `windows-update` session is an outlier that was not ablated. The rule thresholds were not tuned.
+
 ---
 
 ## 1. The split: three independent tracks
