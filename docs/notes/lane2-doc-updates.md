@@ -282,3 +282,94 @@ Apply after `track-a/atomic`, `track-a/policy-engine` and `track-c/orchestrator`
 1. Make the T1486 test script write at least 512 bytes per output file, or the verdict stays unknown.
 2. Run the VM steps in `detection/VM_TEST_PLAN.md` and send back the entropy numbers.
 3. Keep zip/extract sessions in the benign set, and record one where the extracted files stay on disk.
+
+# Added on `track-b/training` (PHASES steps 3.4 and 3.5)
+
+Apply after the earlier branches merge. **All results are preliminary: 2 of 11 batches.**
+
+## CLAUDE.md
+1. **Tech stack, Triage line:** `Python, XGBoost (xgboost-cpu, CPU only, no scikit-learn).`
+2. **ML rules:** add that the model leaves out `n_fim_changes_linked` (a tree's own events hold no FIM events), is saved as JSON and never pickle, and that class weights make scores uncalibrated.
+
+## README.md
+3. **Setup / layout:** `triage/models/` holds the trained model (gitignored). `python -m triage.train` writes it.
+
+## PLANNING.md
+4. **Section 10, Decided:** `| Triage model | XGBoost, depth 3, 60 rounds, fixed in advance. Class weight negatives/positives. Scores are uncalibrated |`; `| Training set | Test-part trees positive. Attack-session background trees and benign trees negative. Events before start_utc dropped. Only trees with an observed start |`; `| Split | By whole batch. Held-out techniques (T1053.005, T1685, T1218.011) are evaluation only, and a held-out session is kept out of training whole |`; `| Model file | XGBoost JSON with a SHA-256 sidecar, never pickle |`.
+5. **Section 8.3 (metrics):** results are per process tree, with Wilson 95% intervals, for precision, recall and false-positive rate, at 0.50 and 0.80. First results (batches 1 and 2) are in `triage/README.md`. Say they are preliminary.
+6. **Section 5.6 / thresholds:** the 0.80 `auto_contain` threshold was set before any model existed. Class weights shift the scores, so re-choose it on all 11 batches.
+7. **Section 9 Risks:** `The preliminary model scores nearly every replayed alert 0.88 to 0.98, benign ones too, so it would plan suspends for benign processes | The model is local only and gitignored. Prefix-snapshot training and all 11 batches come before it feeds policy`.
+8. **Section 4.3 (accepted limits):** tiny benign trees (2 to 15 events) look like the tiny attack trees (T1053.005, T1547.001 have 12 to 14 events). The T1003.001 tree has 2 events because LSA protection blocked the dump, so it is expected to be missed.
+
+## PHASES.md
+9. **Step 3.4:** done in preliminary form: `triage/dataset.py`, `triage/train.py`. Open: batch 3 (waiting for Track A's decision on the duplicate sets), the other 8 batches, T1685 held-out, prefix-snapshot training (the gap between partial and complete trees is large), leave-one-batch-out tuning.
+10. **Step 3.5:** `score_process` is the model, with `None` when there is no valid model or no single observed tree. The pipeline passes it the feature-tree containing the alerting process.
+11. **Step 3.9:** the replay summary says whether a model is loaded.
+
+## ROADMAP.md
+12. **Section 2, `score_process`:** `None` is returned for: no model, a damaged model, a different feature list, events that are not one tree with an observed start, malformed events.
+
+## For Track A
+1. **Batch 3 has two overlapping sets** (sessions starting 17:29 to 17:38, and 19:09 to 19:47, both "run3" for the same techniques). Say which set to use. The 17:29 set has no benign session.
+2. Batch 3 needs `part` labels (a labels folder like `batch-02-labels-v2`) before it can be used.
+3. T1685 held-out sessions are not recorded yet.
+4. More benign sessions with short-lived processes would help: the 12 false positives in the first results are tiny benign trees.
+
+## Added on `track-b/training` (prefix snapshots)
+1. **PLANNING.md Section 10, Decided:** `| Training rows | Snapshots of each tree after 10, 25, 50, 75 and 100% of its time span. A partial snapshot needs 2 events. The whole tree is always kept. A snapshot keeps its tree's label |`.
+2. **PLANNING.md Section 8.3:** report the skew between alert-time and complete-tree scores, next to precision, recall and false-positive rate. First numbers are in `triage/README.md` (preliminary).
+3. **PHASES.md Step 3.4:** done with prefix snapshots. The skew for attacks fell where it was large, and false positives are not clearly better.
+
+## Added on `track-b/training` (label-free scoring)
+1. **PLANNING.md Section 5.6 / 4.1:** the scorer is label-free. It takes a process tree's events and nothing else. It never reads labels, `session.json`, the harness, names, paths or command lines. See `triage/README.md` "Scoring scope".
+2. **PLANNING.md Section 4.3 (accepted limits):** a replayed lab recording is scored with the harness inside the tree and with sensor start-up events, which training left out. That is a harder case than a real endpoint, and it makes replayed alert-time scores pessimistic.
+3. **ROADMAP.md Section 2, `score_process`:** the signature is `score_process(events)`, and the events are the tree containing the alerting process, cut at the first ancestor whose start was not seen.
+
+## Added on `track-b/training` (batch 3)
+1. **PLANNING.md Section 10, Decided:** `| Batch 3 | Second run only (9 sessions). The first attempt (6 sessions) is excluded as a whole. Batch 3 has a busier background than batches 1 and 2, and is kept together in the split |`.
+2. **PLANNING.md Section 8.3:** first results on 3 batches are in `triage/README.md`. Recall at 0.80 fell when batch 3 joined training (12 of 15 for the complete-tree model, 9 of 15 for the snapshot model), false positives fell (5 of 273). Nothing is conclusive: each group has 1 to 9 attack trees.
+3. **PHASES.md Step 3.4:** batches 1 to 3 done. Open: batches 4 to 11 (batch 4 is in the export), T1685 held-out, leave-one-batch-out to choose thresholds, a decision on how to handle a batch-level shift in the background.
+4. **PHASES.md Step 3.9:** `python -m triage.train --only-labelled` leaves out sessions with no labels, and names them.
+
+## Added on `track-b/training` (batch 4, leave-one-batch-out)
+1. **PLANNING.md Section 8.3 (metrics):** report every rate as a count with its 95% interval. Report T1003.001 apart as a documented limitation (about 2 events, LSA protection), never inside recall. Results on 4 batches are in `triage/README.md`: 15 of 16 ordinary attacks caught at 0.80, 6 of 387 benign flagged (snapshot model), 6 of 6 held-out. Still preliminary, and the attack trees repeat the same scripted tests, so trees from different batches are not independent.
+2. **PLANNING.md Section 10, Decided:** `| Evaluation | Leave-one-batch-out. A threshold is only ever chosen from training folds: inside the training batches, the lowest value in 0.5 to 0.95 with a pooled false-positive rate of at most 2%. The rule needs at least 3 training batches |`; `| Documented limitation | T1003.001 is reported apart and never counts toward recall |`.
+3. **PLANNING.md Section 5.6:** a threshold of 0.7 is *proposed* by that rule for the saved model (in-sample for the choice). Nothing applies it. The policy keeps 0.80 until more batches exist.
+4. **PHASES.md Step 3.4:** batches 1 to 4 done. Open: batches 5 to 11, T1685 held-out, whether to drop T1003.001 trees from training (untested).
+5. **For Track A:** batch 4 has no held-out technique sessions. The held-out pair has no new trees from it.
+
+## Added on `track-b/training` (T1003.001 and training)
+1. **PLANNING.md Section 10, Decided / 8.3:** recommended: the T1003.001 attack trees (about 2 events) are left out of training and are still reported apart. On 4 batches this took benign flags at 0.80 for the complete model from 3 of 387 to 0 of 387, and the snapshot model's ordinary recall from 15 of 16 to 16 of 16, at the cost of one held-out tree slipping just under 0.80 (6 of 6 to 5 of 6). A few trees each, so not established. The default is not changed yet: `--exclude-limited-from-training`.
+2. **PLANNING.md Section 8.3:** detecting T1003.001 is a rule-layer job (`R-T1003-002`), not a model job. The model's scores on its near-empty trees (0.85 to 0.91 when it had trained on them) are not detections.
+
+## Added on `track-b/training` (behaviour-rule evaluation)
+1. **PLANNING.md Section 6, Gate 3 / 8.3:** the rules were checked on 4 batches with `python -m detection.rule_eval`: 25 of 26 attack sessions detected by a rule for their technique, 12 of 12 in the out-of-sample batches 3 and 4. The miss is T1003.001 in batch 2 (no command line, no LSASS event). `R-T1003-001` 0 of 4 as LSA protection predicts. 3 of 8 benign sessions had any alert (1 of 4 in batches 3 and 4): `R-T1486-001` on the 2 zip sessions (2 of 2), and the Edge autolaunch value in batch 1.
+2. **PLANNING.md Section 10, Decided:** `| Rule provenance | All rules written in one commit before any replay, from the design. No rule file has changed since (a test checks this). The only change after data is the engine's case-insensitive de-duplication (after batch 1). Batch 1 is in-sample for R-T1547-001, R-T1547-002 and R-T1685-001. Batches 1 and 2 were seen for the rest, 3 and 4 were not |`.
+3. **PLANNING.md Section 4.3 (accepted limits):** the rule results are repeats of the same scripted tests, not a test against other implementations or evasion. No session exists yet for `R-T1105-001`, `R-T1685-001`, `R-FIM-HOSTS`, and none uses a Startup folder for `R-T1547-002`.
+4. **PHASES.md Step 2.7:** the gate "each rule fires on its Atomic test" is met for T1003.001 (by `R-T1003-002` in 3 of 4), T1053.005, T1059.001, T1218.011, T1486 and T1547.001. T1105 and T1685 are still open.
+5. **For Track A:** record sessions for T1105 (needs NAT) and T1685, a hosts-file change, and a Startup-folder persistence test, so the rules with no evidence yet can be checked. Keep the zip and extract sessions in the benign set.
+
+## Added on `track-b/training` (how T1003.001 trees are excluded)
+1. **PLANNING.md Section 10, Decided:** `| Limited trees | An attack tree is "limited" by technique (T1003.001), not by size. LSA protection blocks the dump, so the test part holds only the launcher's ordinary behaviour, however many events. It is left out of training by default (--include-limited-in-training puts it back) and is always reported apart, never in recall |`.
+2. **For Track A:** if a `T1003.001` test ever shows real LSASS access (LSA protection off in a separate recording), that is a different situation: say so, and the technique list would need to change. Until then every `T1003.001` test tree is treated as limited.
+
+## Added on `track-b/training` (T1003.001 left out of training by default)
+1. **PLANNING.md Section 10, Decided:** `| T1003.001 in training | Left out by default (--include-limited-in-training puts it back). Reason: a 2-event tree has no behaviour to learn, not the evaluation numbers. Both versions are reported. T1003.001 is always reported apart and never counts toward recall |`. The saved model is retrained: SHA-256 c9ee90469b20adb98ab4eff56b22ec209ad177e4c10e9309db7a956e8d0c7ff3, batches 1 to 4, local only.
+2. **PLANNING.md Section 5.6:** the rule proposes a threshold of 0.5 for the new saved model (in-sample for the choice). Nothing applies it: the policy keeps 0.80.
+
+## Added on `track-b/training` (pools left out of ML)
+1. **PLANNING.md Section 10, Decided:** `| Pools left out of ML | triage/dataset.py skips every session whose pool is in excluded_from_ml_pools in agent/config/recording_tests.json (today fim-test-only), for training and evaluation, and reports them by name. The list comes from that file only. A missing file, a missing key, or an unknown pool stops the run |`.
+2. **For Track A:** `recording_tests.json` is read by `python -m triage.train --recording-tests PATH` (default `agent/config/recording_tests.json`). The key `excluded_from_ml_pools` is required. If another pool is ever added to the list, the loader needs no change. If a new pool is used and not listed, the run stops with its name.
+3. **For `detection/rule_eval.py`:** it does not skip excluded pools. It has only seen batches 1 to 4, which contain none. Add the same skip before pointing it at a batch 0 folder.
+
+## Added on `track-b/training` (rule_eval skips excluded pools too)
+1. **Supersedes item 3 of "pools left out of ML":** `detection/rule_eval.py` now skips `excluded_from_ml_pools` sessions with the loader's own code, lists them by name, and stops on a missing file or key, an unreadable pool, or an unknown pool. Pass `--recording-tests PATH`.
+2. **PLANNING.md Section 10, Decided (same row):** the rule-layer evaluation and the ML loader share one implementation of the pool skip, so they cannot disagree about which sessions count.
+
+## Added on `track-b/training` (final run: batches 5 and 6, six batches)
+1. **PLANNING.md Section 10, Decided:** `| Limited techniques | T1003.001 and T1105, by technique and never by size. T1105 is PROVISIONAL: both batch 6 sessions have a 2-event test part (cmd.exe start and stop) with no download in it. Left out of training and recall, reported apart with their event counts |`.
+2. **PLANNING.md Section 8.3 / 4.3:** final run on 6 of 11 batches, leave-one-batch-out: 20 of 21 ordinary attacks caught at 0.80 (95.2%, 95% CI 77.3% to 99.2%), 5 to 6 of 661 benign flagged, held-out 5 of 6 (complete model) or 3 of 6 at 0.80 and 6 of 6 at 0.50 (snapshot model). Batch 6 has no ordinary attack tree. Alert-time scoring got worse (18 of 32 malicious-session alerts at 0.80 for the snapshot model, against 25 of 26 on four batches), so the model stays off in the pipeline. Still preliminary.
+3. **PLANNING.md Section 9 (risks) / 7:** a session can be 800 MB and 1.2 million events (Windows Update). Loading is now streamed (peak 1.8 GB for a six-batch run, 367 MB for the rule evaluation), but the pipeline replay still holds a whole session, so sessions over 400,000 events are not replayed for the alert-time view.
+4. **PLANNING.md Section 10, Decided:** the rule evaluation on batches 5 and 6 (never seen before): 6 of 8 attack sessions detected, 6 of 6 apart from T1105; 2 of 4 benign sessions with any alert (the same Edge autolaunch pattern, and the zip session); `R-T1486-001` fires on 3 of 3 zip sessions. `R-T1105-001` is still untested.
+5. **PHASES.md Step 3.4 / 3.5:** done on 6 batches, preliminary. Open: batches 7 to 11, `T1685` held-out, T1105 with a real download, the alert-time drop, and an ablation of the Windows Update session.
+6. **For Track A:** (a) a `T1105` recording whose test part contains the download; (b) check why the batch 6 test part is only `cmd.exe` start and stop; (c) the NAT warm-up produces `R-T1105-001` alerts before `start_utc`; (d) `T1685` sessions; (e) keep the zip, install-uninstall and Windows Update sessions in the benign set.

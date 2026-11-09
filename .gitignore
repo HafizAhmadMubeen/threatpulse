@@ -60,3 +60,6 @@ Thumbs.db
 # Keep the shared sample files (must stay after the *.jsonl rule)
 !contracts/samples/*.jsonl
 !contracts/samples/*.json
+
+# Trained models (triage/models/): local only, never committed
+triage/models/

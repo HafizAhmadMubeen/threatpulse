@@ -29,6 +29,7 @@ from pathlib import Path
 
 from contracts.validate_samples import load_validators
 from detection import zones
+from detection.stream import SortedEvents
 from detection.timeline import order_key, parse_ts, read_jsonl
 
 log = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ def normalise_name(name: str) -> str:
     return "\\".join(parts)
 
 
-def load_session(folder: Path) -> tuple[dict, list[dict], dict[str, dict]]:
+def read_session_json(folder: Path) -> dict:
     try:
         session = json.loads((folder / "session.json").read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as error:
@@ -134,7 +135,16 @@ def load_session(folder: Path) -> tuple[dict, list[dict], dict[str, dict]]:
     missing = [name for name in SESSION_FIELDS if session.get(name) in (None, "")]
     if missing:
         raise SessionError(f"{folder}: session.json lacks {missing}")
+    return session
 
+
+def load_session(folder: Path, labels_dir: Path | None = None,
+                 from_start: bool = False) -> tuple[dict, list[dict], dict[str, dict]]:
+    """`labels_dir` is a folder with `<session folder name>/labels.csv`, used instead of the
+    labels.csv inside the session folder (labels are re-made without touching recordings).
+    `from_start` drops every event before session.json's start_utc: sensor start, settle
+    time and warm-up (agent/tools/record_session.ps1 says Track B computes from start_utc)."""
+    session = read_session_json(folder)
     validator = load_validators()["event"]
     events: list[dict] = []
     for name in ("events.jsonl", "fim.jsonl"):
@@ -143,8 +153,19 @@ def load_session(folder: Path) -> tuple[dict, list[dict], dict[str, dict]]:
     if not events:
         raise SessionError(f"{folder}: no usable events")
 
+    if from_start:
+        start = session.get("start_utc")
+        if not isinstance(start, str):
+            raise SessionError(f"{folder}: session.json has no start_utc")
+        begin = parse_ts(start).timestamp()
+        events = [e for e in events if parse_ts(e["ts"]).timestamp() >= begin]
+        if not events:
+            raise SessionError(f"{folder}: no events at or after start_utc")
+
     labels: dict[str, dict] = {}
-    path = folder / "labels.csv"
+    path = (labels_dir / folder.name / "labels.csv") if labels_dir is not None else folder / "labels.csv"
+    if labels_dir is not None and not path.is_file():
+        raise SessionError(f"{folder}: no labels at {path}")
     if path.is_file():
         with path.open(encoding="utf-8", newline="") as stream:
             labels = {row["event_id"]: row for row in csv.DictReader(stream)}
@@ -357,17 +378,64 @@ def feature_row(stats: TreeStats) -> dict:
     }
 
 
-def extract_session(folder: Path) -> list[dict]:
+def tree_feature_row(events: list[dict]) -> dict | None:
+    """Features of ONE process tree from its own events: what score_process uses, so
+    training and scoring share the code. None when the events are not a single tree whose
+    root start was observed, because training only used such trees (step 3.4).
+
+    FIM events are not part of a tree's events, so n_fim_changes_linked is always 0 here.
+    The model leaves that column out (triage/model.py)."""
+    ordered = sorted(events, key=order_key)
+    trees = build_trees(ordered, assign_processes(ordered), {})
+    if len(trees) != 1:
+        return None
+    (stats,) = trees.values()
+    if not stats.root.start_observed:
+        return None
+    return feature_row(stats)
+
+
+def events_of_tree_containing(events: list[dict], pid: int) -> list[dict]:
+    """The events of the process tree (as defined above) that process `pid` belongs to.
+
+    The pipeline's own tree can reach up to a long-running process whose start was never
+    seen, and everything below it is one tree there. Here each started process under such
+    a parent is its own root, as in training. So this is the tree the model was trained on
+    the shape of. Empty when no event has this pid."""
+    ordered = sorted(events, key=order_key)
+    owner = assign_processes(ordered)
+    mine = [owner[e["event_id"]] for e in ordered if e["pid"] == pid and e["event_id"] in owner]
+    if not mine:
+        return []
+    root = mine[-1].root  # the latest process with this pid
+    return [e for e in ordered if e["event_id"] in owner and owner[e["event_id"]].root is root]
+
+
+def extract_session(folder: Path, labels_dir: Path | None = None, from_start: bool = False) -> list[dict]:
     """One row per process tree, in order of first activity."""
-    session, events, labels = load_session(folder)
+    return [row for row, _ in iter_session_trees(folder, labels_dir, from_start)]
+
+
+def extract_session_trees_in_memory(folder: Path, labels_dir: Path | None = None,
+                                    from_start: bool = False) -> list[tuple[dict, list[dict]]]:
+    """The reference implementation: reads every event into memory. It needs about 3 KB per
+    event, so it fails on a session of a million events. `extract_session_trees` gives the same
+    rows from a stream, and a test holds the two to each other. Kept for that test."""
+    session, events, labels = load_session(folder, labels_dir, from_start)
     owner = assign_processes(events)
     trees = build_trees(events, owner, labels)
     link_fim(events, trees)
+    by_root: dict[Proc, list[dict]] = {}
+    for event in events:
+        proc = owner.get(event["event_id"])
+        if proc is not None:
+            by_root.setdefault(proc.root, []).append(event)
     rows = []
     for number, stats in enumerate(sorted(trees.values(), key=lambda s: s.first)):
         technique = stats.technique or (session.get("technique") if stats.n_malicious else "") or ""
+        mine = by_root.get(stats.root, [])
         rows.append(
-            {
+            ({
                 "session_id": session["session_id"],
                 "tree_id": f"{session['session_id']}:{number}",
                 "root_pid": stats.root.pid,
@@ -382,9 +450,173 @@ def extract_session(folder: Path) -> list[dict]:
                 "n_events": stats.n_events,
                 "n_malicious_events": stats.n_malicious,
                 **feature_row(stats),
-            }
+            }, mine)
         )
     return rows
+
+
+# ---- streaming ------------------------------------------------------------------------------
+
+
+def read_label_codes(path: Path) -> tuple[dict[str, int], list[tuple[str, str, str]], bool]:
+    """labels.csv as event_id -> a small number, and the table of the (label, part, technique)
+    triples the numbers stand for. A million-event session has a million label rows, and a dict
+    of dicts would need about a GB. Later rows for the same event_id win, as in a dict."""
+    codes: dict[str, int] = {}
+    table: list[tuple[str, str, str]] = []
+    known: dict[tuple[str, str, str], int] = {}
+    with path.open(encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        has_part = reader.fieldnames is not None and "part" in reader.fieldnames
+        for row in reader:
+            triple = (row.get("label") or "", row.get("part") or "", row.get("technique") or "")
+            number = known.get(triple)
+            if number is None:
+                number = known[triple] = len(table)
+                table.append(triple)
+            codes[row["event_id"]] = number
+    return codes, table, has_part
+
+
+def compact(event: dict) -> tuple:
+    """The fields a tree's features read, as a tuple (about a fifth of the memory of the event)."""
+    target = event["target"]
+    return (event["event_id"], event["ts"], event["source"], event["event_type"], event["pid"], event["ppid"],
+            event["process"]["signed"], target["path"], target["registry_key"], target["dest_ip"],
+            target["dest_port"], target.get("access_rights"))
+
+
+def expand(item: tuple) -> dict:
+    """A slim event with exactly the fields compact() kept: all that tree_feature_row, the
+    snapshots and the process assignment read."""
+    event_id, ts, source, kind, pid, ppid, signed, path, key, dest_ip, dest_port, rights = item
+    return {"event_id": event_id, "ts": ts, "source": source, "event_type": kind, "pid": pid, "ppid": ppid,
+            "process": {"signed": signed},
+            "target": {"path": path, "registry_key": key, "dest_ip": dest_ip, "dest_port": dest_port,
+                       "access_rights": rights}}
+
+
+def iter_session_trees(folder: Path, labels_dir: Path | None = None, from_start: bool = False):
+    """Yields (row, events) for each process tree, in order of first activity. The same rows as
+    the in-memory extractor, from a stream: events are read one at a time in time order,
+    counted as they pass, and only the trees whose start was observed keep their events (as
+    tuples, and expanded one tree at a time, so a caller that drops a tree's events after
+    using them never holds more than that tree). `events` are slim: see expand()."""
+    session = read_session_json(folder)
+    validator = load_validators()["event"]
+    paths = [folder / "events.jsonl", folder / "fim.jsonl"]
+    begin = None
+    if from_start:
+        start = session.get("start_utc")
+        if not isinstance(start, str):
+            if SortedEvents(paths, validator.is_valid).valid == 0:
+                raise SessionError(f"{folder}: no usable events")
+            raise SessionError(f"{folder}: session.json has no start_utc")
+        begin = parse_ts(start).timestamp()
+    stream = SortedEvents(paths, validator.is_valid, begin)
+    if stream.valid == 0:
+        raise SessionError(f"{folder}: no usable events")
+    if begin is not None and len(stream) == 0:
+        raise SessionError(f"{folder}: no events at or after start_utc")
+
+    path = (labels_dir / folder.name / "labels.csv") if labels_dir is not None else folder / "labels.csv"
+    if labels_dir is not None and not path.is_file():
+        raise SessionError(f"{folder}: no labels at {path}")
+    codes, table, has_part = read_label_codes(path) if path.is_file() else ({}, [], False)
+    labelled = bool(codes)
+    session["_harness_excluded"] = int(labelled and has_part)
+    if session["_harness_excluded"]:
+        unknown = {table[number][1] for number in set(codes.values())} - PARTS
+        if unknown:
+            raise SessionError(f"{folder}: labels.csv has unknown part values {sorted(map(str, unknown))}")
+    elif labelled:
+        log.warning("%s: labels.csv has no part column, so the wrapper that runs each test is counted "
+                    "as the test. These rows must not be used for training.", folder.name)
+
+    current: dict[int, Proc] = {}
+    trees: dict[Proc, TreeStats] = {}
+    kept: dict[Proc, list[tuple]] = {}
+    fim_events: list[dict] = []
+    used = harness = 0
+    for event in stream:
+        number = codes.get(event["event_id"])
+        if session["_harness_excluded"] and number is not None and table[number][1] == "harness":
+            harness += 1
+            continue
+        used += 1
+        if event["event_type"] == "fim_change":
+            fim_events.append(event)
+        pid = event["pid"]
+        if event["source"] == "fim" or pid == 0:
+            continue
+        # Which process this event belongs to (what assign_processes does, one event at a time).
+        if event["source"] == "etw" and event["event_type"] == "process_start":
+            proc = Proc(pid, start_observed=True)
+            parent = current.get(event["ppid"]) if event["ppid"] else None
+            if parent is not None and parent.start_observed:
+                proc.parent, proc.root, proc.depth = parent, parent.root, parent.depth + 1
+                parent.children += 1
+            else:
+                proc.root = proc
+            current[pid] = proc
+        else:
+            proc = current.get(pid)
+            if proc is None:
+                proc = Proc(pid, start_observed=False)
+                proc.root = proc
+                current[pid] = proc
+        if proc.signed is None:
+            proc.signed = event["process"]["signed"]
+        # Counting it in its tree (what build_trees does).
+        root = proc.root
+        stats = trees.get(root)
+        if stats is None:
+            stats = trees[root] = TreeStats(root)
+        if proc.stats is None:
+            proc.stats = stats
+            stats.processes.append(proc)
+        when = parse_ts(event["ts"]).timestamp()
+        stats.first, stats.last = min(stats.first, when), max(stats.last, when)
+        stats.n_events += 1
+        if number is not None and table[number][0] == "malicious":
+            stats.n_malicious += 1
+            stats.technique = stats.technique or table[number][2]
+        count_event(stats, event, when)
+        if root.start_observed:
+            kept.setdefault(root, []).append(compact(event))
+    if used == 0:
+        raise SessionError(f"{folder}: no events are left after leaving out the harness")
+    if harness:
+        log.info("%s: %d harness event(s) left out", folder.name, harness)
+    link_fim(fim_events, trees)
+    del fim_events, codes, current
+
+    for number, stats in enumerate(sorted(trees.values(), key=lambda s: s.first)):
+        technique = stats.technique or (session.get("technique") if stats.n_malicious else "") or ""
+        row = {
+            "session_id": session["session_id"],
+            "tree_id": f"{session['session_id']}:{number}",
+            "root_pid": stats.root.pid,
+            "pool": session["pool"],
+            "batch": session["batch"],
+            "label": tree_label(stats, labelled),
+            "technique": technique,
+            "network": session["network"],
+            "activity": session.get("activity") or "",
+            "observed_start": int(stats.root.start_observed),
+            "harness_excluded": session["_harness_excluded"],
+            "n_events": stats.n_events,
+            "n_malicious_events": stats.n_malicious,
+            **feature_row(stats),
+        }
+        yield row, [expand(item) for item in kept.pop(stats.root, [])]
+
+
+def extract_session_trees(folder: Path, labels_dir: Path | None = None,
+                          from_start: bool = False) -> list[tuple[dict, list[dict]]]:
+    """Each row with the events of its tree, all at once. A caller that can use the trees one
+    after another should iterate iter_session_trees instead."""
+    return list(iter_session_trees(folder, labels_dir, from_start))
 
 
 def write_csv(rows: list[dict], path: Path) -> None:
@@ -398,11 +630,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Extract behaviour features per process tree.")
     parser.add_argument("sessions", nargs="+", type=Path, help="session folders")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--labels-dir", type=Path,
+                        help="folder of <session>/labels.csv to use instead of each session's own labels.csv")
+    parser.add_argument("--from-start", action="store_true",
+                        help="leave out events before each session's start_utc (sensor start and warm-up)")
     args = parser.parse_args(argv)
     rows: list[dict] = []
     for folder in args.sessions:
         try:
-            rows += extract_session(folder)
+            rows += extract_session(folder, args.labels_dir, args.from_start)
         except SessionError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1

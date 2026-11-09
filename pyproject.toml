@@ -11,6 +11,7 @@ dependencies = [
     "pefile==2024.8.26",
     "pyyaml==6.0.3",
     "uvicorn==0.54.0",
+    "xgboost-cpu==3.4.1",
     "yara-python==4.5.4",
 ]
 

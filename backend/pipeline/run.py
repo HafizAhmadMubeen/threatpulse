@@ -3,7 +3,7 @@
 Order of work for each event, in time order:
   1. update what we remember (processes, writers, FIM state)
   2. match_rules (stateful), and a hash-list check of a started process's own SHA-256
-  3. score_process for the alert's process tree  (STUB: always None)
+  3. score_process for the alert's process tree  (None unless --use-model is given and a model is in triage/models/)
   4. decide(alert, context)                      (PLANS only: automatic actions stay pending)
   5. write_report, only for a high-risk alert    (STUB: no LLM)
 
@@ -33,7 +33,8 @@ from detection.scanner import scan_file
 from detection.timeline import format_ts, read_jsonl
 from policy import decide
 from policy.engine import default_policy
-from triage.score import score_process
+from triage.features import events_of_tree_containing
+from triage.score import model_info, no_score, score_process
 
 log = logging.getLogger(__name__)
 RUN_START = re.compile(r"^e-([0-9]{8}T[0-9]{6})-")
@@ -56,6 +57,7 @@ class SessionResult:
     microsoft_root_events: int = 0
     # Per ransomware burst (R-T1486-001), the final entropy verdict: high, low or unknown.
     # Without a file reader (every replay outside the lab VM) all of them are unknown.
+    model: dict = field(default_factory=dict)  # triage.score.model_info
     entropy_reader: bool = False
     entropy_verdicts: dict = field(default_factory=dict)
     entropy_refused: dict = field(default_factory=dict)
@@ -223,7 +225,8 @@ class Replay:
     # ---- scoring and context ------------------------------------------------------
 
     def score(self, proc: Proc) -> float | None:
-        value = self.scorer(proc.tree_events())
+        # The tree training saw: the process's own tree, not everything up to an unobserved root.
+        value = self.scorer(events_of_tree_containing(proc.tree_events(), proc.pid))
         if value is not None and not (isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1):
             raise PipelineError(f"score_process returned {value!r}, not a number from 0 to 1 or None")
         return value
@@ -287,12 +290,19 @@ class Replay:
             self.result.reports.append(report)
 
 
-def run_session(folder: Path, *, scorer=score_process, reporter=report_stub.write_report,
-                scan_files: bool = False, sampler: FileSampler | None = None) -> SessionResult:
+def run_session(folder: Path, *, scorer=None, reporter=report_stub.write_report,
+                scan_files: bool = False, sampler: FileSampler | None = None,
+                use_model: bool = False) -> SessionResult:
     """Replays one session folder (events.jsonl and fim.jsonl). Reads only.
 
     `sampler` lets the ransomware check read the newly written document files. It is for
-    the lab VM, where those files exist. Without it every burst verdict is unknown."""
+    the lab VM, where those files exist. Without it every burst verdict is unknown.
+
+    `use_model` lets the trained model's score into alerts, and so into decide(). It is off
+    by default: without it every risk_score is null, whatever is in triage/models/. An
+    explicit `scorer` (tests, evaluation) overrides both."""
+    if scorer is None:
+        scorer = score_process if use_model else no_score
     validator = load_validators()["event"]
     agent, _ = read_jsonl(folder / "events.jsonl")
     fim, _ = read_jsonl(folder / "fim.jsonl")
@@ -314,6 +324,7 @@ def run_session(folder: Path, *, scorer=score_process, reporter=report_stub.writ
         replay.feed(event)
     replay.flush(float("inf"))
     result.rejected_by_rules = replay.engine.rejected
+    result.model = model_info(use_model and scorer is score_process)
     result.entropy_reader = sampler is not None
     verdicts = [b.verdict for b in replay.bursts.values()]
     result.entropy_verdicts = {v: verdicts.count(v) for v in ("high", "low", "unknown") if v in verdicts}

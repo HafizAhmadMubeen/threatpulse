@@ -66,6 +66,7 @@ def summarise(result: SessionResult, labels: dict[str, dict], labels_used: str) 
         "alerts_by_rule": dict(sorted(Counter(a["rule_id"] for a in alerts).items())),
         "decisions_by_rule": dict(sorted(Counter(r for d in decisions for r in d["policy_rules"]).items())),
         "actions": dict(sorted(Counter(f"{a['action']}:{a['status']}" for a in actions).items())),
+        "model": result.model,
         "entropy": {
             "reader": "on" if result.entropy_reader else "off",
             "bursts_by_verdict": result.entropy_verdicts,
@@ -77,7 +78,12 @@ def summarise(result: SessionResult, labels: dict[str, dict], labels_used: str) 
                 "no file reader (replay outside the lab VM): every R-T1486-001 burst is 'unknown', "
                 "so R-T1486-002 is never raised"
             ),
-            "scorer": "STUB: score_process returns None, so every risk_score is null",
+            "scorer": (
+                "model score IN USE (--use-model). PRELIMINARY: scores rank trees, they are not probabilities"
+                if result.model.get("used") else
+                "model score NOT USED: every risk_score is null, so no decision depends on the model"
+                + ("" if result.model.get("loaded") else " (and no model is in triage/models/)")
+            ),
             "report_writer": "STUB: no LLM call",
             "suspended_pids": "always empty: nothing is executed, decisions stay pending",
             "fim_baseline": FIM_NOTE,

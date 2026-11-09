@@ -234,10 +234,9 @@ def delete_session(tmp_path, count=12):
     return recording
 
 
-def test_the_scorer_is_a_stub_that_says_not_scored():
-    assert score.IS_STUB is True
+def test_without_a_model_the_scorer_says_not_scored():
+    assert score.is_stub() is True  # tests/conftest.py points the scorer at an empty folder
     assert score.score_process([{"anything": 1}]) is None
-    assert "STUB" in score.score_process.__doc__
 
 
 def test_with_the_stub_nothing_has_a_risk_score_and_nothing_is_contained(tmp_path):
@@ -405,7 +404,7 @@ def test_the_summary_labels_its_stubs_and_its_approximation(tmp_path):
     folder = session(tmp_path, full_recording())
     summary = output.write_session(run_session(folder), folder, tmp_path / "out", None)
     notes = summary["notes"]
-    assert "STUB" in notes["scorer"] and "STUB" in notes["report_writer"]
+    assert "NOT USED" in notes["scorer"] and "STUB" in notes["report_writer"]
     assert notes["fim_baseline"].startswith("APPROXIMATION")
     assert "empty" in notes["suspended_pids"]
     assert notes["microsoft_root"].startswith("0 of")  # recordings 1 to 11 have no such field
