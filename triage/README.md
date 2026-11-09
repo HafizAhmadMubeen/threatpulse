@@ -74,7 +74,7 @@ uv run pytest tests/test_features.py
 
 ## Training and scoring (steps 3.4 and 3.5)
 
-**PRELIMINARY. 4 of 11 batches are used, with 4 ordinary attack trees per batch (and T1003.001 apart). These results show that the pipeline works. They do not say how well the model detects.** Batch 3 is its second run only (9 valid sessions, decided by the repository lead). The tables for 2 and 3 batches below are the earlier runs, kept for comparison. **Since the last section, T1003.001 trees are left out of training by default** (a tree of 2 events has no behaviour to learn), and `--include-limited-in-training` puts them back. Batch 4 (7 sessions) is added in the last section.
+**PRELIMINARY. 6 of 11 batches are used in the final run (last section), with 4 or 5 ordinary attack trees in each of batches 1 to 5 and none in batch 6. These results show that the pipeline works. They do not say how well the model detects.** Batch 3 is its second run only (9 valid sessions, decided by the repository lead). The tables for 2 and 3 batches below are the earlier runs, kept for comparison. **Since the last section, T1003.001 trees are left out of training by default** (a tree of 2 events has no behaviour to learn), and `--include-limited-in-training` puts them back. Batch 4 (7 sessions) is added in the batch 4 section, and batches 5 and 6 in the final run at the end.
 
 ```bash
 uv run python -m triage.train \
@@ -388,3 +388,143 @@ Track A's `agent/config/recording_tests.json` lists pools that are never used to
 - **Where the file is.** The key is on `track-a/fim-session` or later, so `agent/config/recording_tests.json` may not exist on this branch yet. Until Track A's branch is merged, pass a copy: `--recording-tests PATH` (the commands in the sections above need it now).
 
 `detection/rule_eval.py` (the rule-layer evaluation) applies the same list with the same code (it imports these functions), so it skips those sessions, lists them by name and stops in the same cases. See `detection/README.md`.
+
+## Final run: six batches (6 of 11)
+
+**PRELIMINARY.** 6 of 11 batches. Leave-one-batch-out: each batch is tested by a model that never saw it, trained on the other five. Held-out techniques (T1053.005, T1218.011; T1685 has no recording yet) are evaluated only. Every rate is a count with its 95% interval. The 0.80 threshold is not tuned anywhere, and `--use-model` stays off by default.
+
+**What was added**
+- **Batch 5**: 8 sessions (3 `T1547.001`, `T1486`, `T1059.001`, `T1003.001`, and 2 benign: normal use and zip-files). 5 ordinary attack trees. No held-out technique.
+- **Batch 6**: 4 sessions, recorded on NAT: 2 `T1105` and 2 benign (install-uninstall, and Windows Update with 1,180,365 events). It has **no ordinary attack tree**, so it adds benign evidence only (122 benign trees) and no recall.
+- **Totals**: 21 ordinary attack trees (was 16) and 661 benign trees (was 387) across the six test folds, plus 6 held-out attack trees and 19 benign ones (unchanged: batches 4 to 6 hold no held-out technique).
+
+**`T1105` is limited, provisionally, and by technique.** The two `T1105` sessions of batch 6 have a test part of 2 events: `cmd.exe` starting and stopping, with no download behaviour in it. A tree like that has no behaviour of the technique to learn or to miss, so `T1105` is handled exactly like `T1003.001`: by technique and never by size, left out of training, left out of recall, and reported apart with its event count (both trees: 2 events, scores 0.0021 to 0.0024, 0 of 2 flagged at 0.50 or 0.80). The reason is the test part's content, not the numbers. It is provisional: if a later recording shows a real download in a `T1105` test part, `LIMITATION_TECHNIQUES` in `triage/dataset.py` has to be revisited. `T1003.001` is unchanged: 0 of 5 flagged, including the batch 5 tree of 57 events (the 56-event test part plus one more event) that is only ordinary PowerShell start-up, scored 0.005 and 0.024.
+
+**Memory.** Batch 6's Windows Update session is 843.8 MB and 1,180,365 events (92% of them file writes), about ten times any earlier session.
+- *Before:* the loader read every event into a dict (about 3 KB each). Under `ulimit -v 3500000` on that session alone it stopped with `MemoryError` at 3.44 GB resident after 18.7 seconds, while still parsing the file.
+- *What changed:*
+  1. `detection/stream.py` reads a session twice. One pass keeps only each valid event's sort key and file position (about 200 bytes per event). Then events are read back one at a time in the *same* order as before (stable sort on time, start before stop, file order for ties).
+  2. `triage/features.py` builds the trees as events pass: process assignment, counting, labels and harness removal are done per event. Labels are held as small codes, not as one dict per row. Only trees whose start was observed keep their events, as tuples, expanded one tree at a time.
+  3. The loader makes each tree's snapshots as soon as the tree is read and then drops its events, so memory holds one tree's events and not the batch's.
+  4. `detection/rule_eval.py` uses the same stream. The pipeline replay still holds a whole session in memory, so a session over 400,000 events is **not replayed** for the alert-time view; the report names it (`20261107T172325-benign-run12`, 1,180,365 events).
+- *After:* the same session alone peaks at **1,766 MB** in 4 min 44 s; the six-batch training run peaked at **1,781 MB** in 19 min 10 s; the six-batch rule evaluation at **367 MB** in 7 min 53 s. All three ran under `ulimit -v 3500000`.
+- *Same results:* the old in-memory extractor is kept as `extract_session_trees_in_memory`, and tests hold the new one to it (rows, each tree's events, snapshot rows). On three real sessions (an attack, a 95k-event and a 121k-event benign one) every row, every tree's event ids and every snapshot row are identical.
+
+### Results, next to the four-batch numbers
+
+Counts, with the 95% interval. Each batch was scored by a different model, so a sum is not one model's result. "4 batches" is the earlier run with `T1003.001` left out of training (the default then); "6 batches" is the final run.
+
+| complete model, summed over the held-out batches | 4 batches (T1003.001 left out) | 6 batches (T1003.001 and T1105 left out) |
+|---|---|---|
+| Ordinary attacks caught, at 0.50 | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) |
+| Benign trees flagged, at 0.50 | 2 of 387 (0.5%, 95% CI 0.1% to 1.9%) | 5 of 661 (0.8%, 95% CI 0.3% to 1.8%) |
+| Ordinary attacks caught, at 0.80 | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) |
+| Benign trees flagged, at 0.80 | 0 of 387 (0%, 95% CI 0% to 1%) | 5 of 661 (0.8%, 95% CI 0.3% to 1.8%) |
+| Ordinary attacks caught, at the threshold chosen on training folds | 15 of 16 (93.8%, 95% CI 71.7% to 98.9%) | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) |
+| Benign trees flagged, at the threshold chosen on training folds | 2 of 387 (0.5%, 95% CI 0.1% to 1.9%) | 5 of 661 (0.8%, 95% CI 0.3% to 1.8%) |
+| Held-out attacks caught, at 0.80 | 6 of 6 (100%, 95% CI 61% to 100%) | 5 of 6 (83.3%, 95% CI 43.6% to 97%) |
+| Held-out benign flagged, at 0.80 | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| Held-out attacks caught, at the threshold chosen on training folds | 6 of 6 (100%, 95% CI 61% to 100%) | 5 of 6 (83.3%, 95% CI 43.6% to 97%) |
+| Held-out benign flagged, at the threshold chosen on training folds | 1 of 19 (5.3%, 95% CI 0.9% to 24.6%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| Documented limitations flagged at 0.80 (NOT in recall) | T1003.001 0 of 4 | T1003.001 0 of 5; T1105 0 of 2 |
+| Attacks still flagged at 0.50 on 25 to 75% of their span | 10 of 30 (33.3%, 95% CI 19.2% to 51.2%) | 14 of 40 (35%, 95% CI 22.1% to 50.5%) |
+| Benign trees flagged early only | 4 of 314 (1.3%, 95% CI 0.5% to 3.2%) | 6 of 551 (1.1%, 95% CI 0.5% to 2.4%) |
+| Benign-session alerts at or above 0.80 when they fire | 3 of 3 (100%, 95% CI 43.8% to 100%) | 4 of 5 (80%, 95% CI 37.6% to 96.4%) |
+| Malicious-session alerts at or above 0.80 when they fire | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) | 26 of 32 (81.2%, 95% CI 64.7% to 91.1%) |
+
+| snapshots model, summed over the held-out batches | 4 batches (T1003.001 left out) | 6 batches (T1003.001 and T1105 left out) |
+|---|---|---|
+| Ordinary attacks caught, at 0.50 | 16 of 16 (100%, 95% CI 80.6% to 100%) | 21 of 21 (100%, 95% CI 84.5% to 100%) |
+| Benign trees flagged, at 0.50 | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) | 6 of 661 (0.9%, 95% CI 0.4% to 2%) |
+| Ordinary attacks caught, at 0.80 | 16 of 16 (100%, 95% CI 80.6% to 100%) | 20 of 21 (95.2%, 95% CI 77.3% to 99.2%) |
+| Benign trees flagged, at 0.80 | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) | 6 of 661 (0.9%, 95% CI 0.4% to 2%) |
+| Ordinary attacks caught, at the threshold chosen on training folds | 16 of 16 (100%, 95% CI 80.6% to 100%) | 21 of 21 (100%, 95% CI 84.5% to 100%) |
+| Benign trees flagged, at the threshold chosen on training folds | 6 of 387 (1.6%, 95% CI 0.7% to 3.3%) | 6 of 661 (0.9%, 95% CI 0.4% to 2%) |
+| Held-out attacks caught, at 0.80 | 5 of 6 (83.3%, 95% CI 43.6% to 97%) | 3 of 6 (50%, 95% CI 18.8% to 81.2%) |
+| Held-out benign flagged, at 0.80 | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| Held-out attacks caught, at the threshold chosen on training folds | 6 of 6 (100%, 95% CI 61% to 100%) | 6 of 6 (100%, 95% CI 61% to 100%) |
+| Held-out benign flagged, at the threshold chosen on training folds | 0 of 19 (0%, 95% CI 0% to 16.8%) | 0 of 19 (0%, 95% CI 0% to 16.8%) |
+| Documented limitations flagged at 0.80 (NOT in recall) | T1003.001 0 of 4 | T1003.001 0 of 5; T1105 0 of 2 |
+| Attacks still flagged at 0.50 on 25 to 75% of their span | 29 of 31 (93.5%, 95% CI 79.3% to 98.2%) | 41 of 42 (97.6%, 95% CI 87.7% to 99.6%) |
+| Benign trees flagged early only | 4 of 314 (1.3%, 95% CI 0.5% to 3.2%) | 4 of 551 (0.7%, 95% CI 0.3% to 1.9%) |
+| Benign-session alerts at or above 0.80 when they fire | 1 of 3 (33.3%, 95% CI 6.1% to 79.2%) | 2 of 5 (40%, 95% CI 11.8% to 76.9%) |
+| Malicious-session alerts at or above 0.80 when they fire | 25 of 26 (96.2%, 95% CI 81.1% to 99.3%) | 18 of 32 (56.2%, 95% CI 39.3% to 71.8%) |
+
+Per test batch, 6 batches (the model never saw that batch):
+
+complete model:
+
+| Test batch | Threshold chosen on training folds | Ordinary attacks caught at 0.80 | Benign flagged at 0.80 | Held-out caught at 0.80 | Limited trees: technique score (events) |
+|---|---|---|---|---|---|
+| 1 | 0.5 | 4 of 4 (100%, 95% CI 51% to 100%) | 0 of 117 (0%, 95% CI 0% to 3.2%) | 2 of 2 (100%, 95% CI 34.2% to 100%) | T1003.001 0.0019 (2) |
+| 2 | 0.5 | 3 of 4 (75%, 95% CI 30.1% to 95.4%) | 0 of 44 (0%, 95% CI 0% to 8%) | 1 of 2 (50%, 95% CI 9.5% to 90.5%) | T1003.001 0.0023 (2) |
+| 3 | 0.5 | 4 of 4 (100%, 95% CI 51% to 100%) | 0 of 112 (0%, 95% CI 0% to 3.3%) | 2 of 2 (100%, 95% CI 34.2% to 100%) | T1003.001 0.0021 (2) |
+| 4 | 0.5 | 4 of 4 (100%, 95% CI 51% to 100%) | 0 of 114 (0%, 95% CI 0% to 3.3%) | none | T1003.001 0.0021 (2) |
+| 5 | 0.5 | 5 of 5 (100%, 95% CI 56.6% to 100%) | 0 of 152 (0%, 95% CI 0% to 2.5%) | none | T1003.001 0.005 (57) |
+| 6 | 0.5 | 0 of 0 (no cases) | 5 of 122 (4.1%, 95% CI 1.8% to 9.2%) | none | T1105 0.0024 (2), T1105 0.0024 (2) |
+
+snapshots model:
+
+| Test batch | Threshold chosen on training folds | Ordinary attacks caught at 0.80 | Benign flagged at 0.80 | Held-out caught at 0.80 | Limited trees: technique score (events) |
+|---|---|---|---|---|---|
+| 1 | 0.5 | 4 of 4 (100%, 95% CI 51% to 100%) | 2 of 117 (1.7%, 95% CI 0.5% to 6%) | 1 of 2 (50%, 95% CI 9.5% to 90.5%) | T1003.001 0.0047 (2) |
+| 2 | 0.5 | 3 of 4 (75%, 95% CI 30.1% to 95.4%) | 0 of 44 (0%, 95% CI 0% to 8%) | 1 of 2 (50%, 95% CI 9.5% to 90.5%) | T1003.001 0.0035 (2) |
+| 3 | 0.5 | 4 of 4 (100%, 95% CI 51% to 100%) | 3 of 112 (2.7%, 95% CI 0.9% to 7.6%) | 1 of 2 (50%, 95% CI 9.5% to 90.5%) | T1003.001 0.0029 (2) |
+| 4 | 0.5 | 4 of 4 (100%, 95% CI 51% to 100%) | 0 of 114 (0%, 95% CI 0% to 3.3%) | none | T1003.001 0.0067 (2) |
+| 5 | 0.5 | 5 of 5 (100%, 95% CI 56.6% to 100%) | 0 of 152 (0%, 95% CI 0% to 2.5%) | none | T1003.001 0.0244 (57) |
+| 6 | 0.5 | 0 of 0 (no cases) | 1 of 122 (0.8%, 95% CI 0.1% to 4.5%) | none | T1105 0.0021 (2), T1105 0.0021 (2) |
+
+**How to read it**
+- **Ordinary attacks.** 20 of 21 caught at 0.80 by both models (95.2%, 95% CI 77.3% to 99.2%). At 0.50 the snapshot model catches 21 of 21 (100%, 95% CI 84.5% to 100%). The one miss at 0.80 is the `T1486` tree of **batch 2** (complete model 0.21, snapshot model 0.71). Batch 2 was the weakest fold in every earlier run too (there it was `T1059.001`), so a missed tree in batch 2 is a pattern, not new noise.
+- **Benign trees.** 5 of 661 flagged by the complete model (0.8%, 95% CI 0.3% to 1.8%) and 6 of 661 by the snapshot model (0.9%, 95% CI 0.4% to 2%). Four batches gave 0 of 387 and 6 of 387. **In batch 6 the complete model flags 5 of 122** (4.1%, 95% CI 1.8% to 9.2%), all in the install-uninstall session (trees of about 5,000 events, scored 0.96 to 0.98); the snapshot model flags 1 of 122 (0.8%, 95% CI 0.1% to 4.5%). In that fold the only install-uninstall evidence in training is batch 3's.
+- **Held-out techniques.** The complete model catches 5 of 6 at 0.80 (the miss is `T1218.011` in batch 2, 0.21). The snapshot model catches **3 of 6 at 0.80 but 6 of 6 at 0.50**: its `T1218.011` scores are 0.79, 0.50 and 0.64, below the line. `T1053.005` is caught every time. This is a threshold effect on three trees, and 0.80 is not tuned for it.
+- **The threshold rule.** The rule (lowest grid value whose pooled false-positive rate in the training folds is at most 2%) chose **0.5 in all 12 fold-models**, so the "chosen" rows equal the 0.50 rows and add no information here. The threshold it proposes for the saved model is also 0.5. That is in-sample for the choice, is a proposal only, and is applied nowhere: the policy keeps 0.80.
+- **Partial trees (skew).** Snapshot training still keeps attacks flagged on 25 to 75% of their span: 41 of 42 (97.6%, 95% CI 87.7% to 99.6%) against 14 of 40 (35%, 95% CI 22.1% to 50.5%) for the complete model.
+- **At alert time (pipeline replay) the picture is worse and `--use-model` must stay off.** Alerts at or above 0.80 when they fire: in malicious sessions 18 of 32 (56.2%, 95% CI 39.3% to 71.8%) for the snapshot model and 26 of 32 (81.2%) for the complete model, against 25 of 26 on four batches; in benign sessions 2 of 5 and 4 of 5. The replayed tree still holds the wrapper that runs each test, which training left out (see "Scoring scope"), and I did not investigate the drop further. The Windows Update session was not replayed (above).
+- **Sample size.** Each group is a handful of trees, and the attack trees are the same scripted tests run again in every batch, so trees from different batches are not independent draws. The intervals do not account for that.
+
+**Does the Windows Update session dominate the benign training rows? No, by rows.** In the final model it contributes 27 of 661 benign trees (4.1%, 95% CI 2.8% to 5.9%) and 64 of 1,310 snapshot rows (4.9%, 95% CI 3.8% to 6.2%); the largest contributor, a normal-use session of batch 5, gives 240 rows (18.3%). By activity the benign snapshot rows are: normal use 491, install-uninstall 376, admin PowerShell 172, zip-files 82, Windows Update 64, and the background trees of the 17 attack sessions 125. What does stand out is the size of its one big tree: 741,055 events against 77,472 for the largest tree among the other four biggest contributors. In the fold that tests batch 6, whose models never saw it, that tree is not among the highest-scoring benign trees of either model. I did not run a leave-this-session-out ablation (another 19-minute run), so this is the share of rows and one fold, not a controlled test.
+
+**The saved model.** The snapshot model trained on all six batches with `T1003.001` and `T1105` left out: 40 training sessions, 67 positive and 1,310 negative training rows. **SHA-256 `8b6e762f683427a7a144c05232ad57b7717ce41a17d2a77fe6d8dcd2a203aa65`**. It is local and gitignored (`triage/models/`), and replaces `c9ee9046…`. `--use-model` stays off, so nothing in the pipeline uses it unless asked.
+
+## Reproducing the results
+
+**Data, outside the repo.** The repo is public and never holds recordings. Put the exports in one folder, here `/mnt/e/threatpulse-data/vm-export`, with this layout (the labels folders are the ones the training reads, not the `labels.csv` inside each session):
+
+```
+vm-export/batch-01 .. batch-06        sessions (events.jsonl, fim.jsonl, session.json)
+vm-export/batch-01-labels-v3  batch-02-labels-v2  batch-03-labels  batch-04-labels  batch-05-labels  batch-06-labels
+```
+
+`batch-03` holds two runs; its labels folder covers only the valid second one, so use `--only-labelled`.
+
+**`recording_tests.json`.** Both commands read Track A's `agent/config/recording_tests.json` for its `excluded_from_ml_pools` list (today `fim-test-only`). **`--recording-tests PATH`** points at it. The default is `agent/config/recording_tests.json` in the repo, which exists once Track A's `track-a/fim-session` branch (or later) is merged; until then pass a copy (`git show origin/track-a/fim-session:agent/config/recording_tests.json > recording_tests.json`). Without the file, or without the key, the run stops.
+
+**Commands** (WSL, repo root; `uv sync` installs the pinned dependencies, including `xgboost-cpu`). The memory limit makes a runaway job fail instead of freezing the laptop. Reports go to `data/runs/`, which git ignores.
+
+```bash
+E=/mnt/e/threatpulse-data/vm-export; R=recording_tests.json
+ulimit -v 3500000; export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+
+# Training and evaluation, leave-one-batch-out (about 19 minutes, peak about 1.8 GB). Saves triage/models/.
+uv run python -m triage.train --only-labelled --recording-tests $R \
+  --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
+  --batch 3 $E/batch-03 $E/batch-03-labels   --batch 4 $E/batch-04 $E/batch-04-labels \
+  --batch 5 $E/batch-05 $E/batch-05-labels   --batch 6 $E/batch-06 $E/batch-06-labels \
+  --out data/runs/training-lobo-123456
+
+# The behaviour rules, read only (about 8 minutes, peak about 0.4 GB).
+uv run python -m detection.rule_eval --only-labelled --recording-tests $R \
+  --batch 1 $E/batch-01 $E/batch-01-labels-v3 --batch 2 $E/batch-02 $E/batch-02-labels-v2 \
+  --batch 3 $E/batch-03 $E/batch-03-labels   --batch 4 $E/batch-04 $E/batch-04-labels \
+  --batch 5 $E/batch-05 $E/batch-05-labels   --batch 6 $E/batch-06 $E/batch-06-labels \
+  --out data/runs/rule-eval-123456
+
+# Two reports side by side (counts and 95% intervals).
+uv run python -m triage.compare "4 batches=data/runs/training-lobo-1234-default/report.json" \
+  "6 batches=data/runs/training-lobo-123456/report.json"
+
+uv run pytest          # the tests build their own small synthetic sessions and need no recordings
+```
+
+Use `--no-save` on the training command to leave `triage/models/` alone. **The saved model is local and gitignored**: every run of the training command overwrites `triage/models/behaviour_model.json` and prints its SHA-256, nothing in it is ever committed, and the pipeline only uses it with `--use-model` (off by default). The run is deterministic (fixed seed, one thread); two runs of the same code on the same recordings gave identical numbers.

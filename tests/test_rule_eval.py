@@ -129,7 +129,7 @@ def test_only_labelled_leaves_out_sessions_that_have_no_labels(export):
 def test_the_engine_change_affects_exactly_the_rules_that_dedupe_on_text():
     affected = {r.id for r in load_rules() if any(name != "pid" for name in r.dedupe_by)}
     assert set(rule_eval.RULE_HISTORY["engine_change_after_data"]["affects"]) == affected
-    assert set(rule_eval.BATCH_STATUS) == {1, 2, 3, 4} and rule_eval.OUT_OF_SAMPLE == (3, 4)
+    assert set(rule_eval.BATCH_STATUS) == {1, 2, 3, 4, 5, 6} and rule_eval.OUT_OF_SAMPLE == (3, 4) and rule_eval.NEW_BATCHES == (5, 6)
 
 
 def test_rule_files_have_one_commit_so_nothing_was_tuned_after_data():
@@ -162,11 +162,11 @@ def test_every_rule_states_what_it_was_written_or_tuned_against(export):
     per_rule = result["summary"]["per_rule"]
     assert set(per_rule) == {r.id for r in load_rules()}
     for rule_id, r in per_rule.items():
-        assert "out-of-sample" in r["written_or_tuned_against"] and "batches 3 and 4" in r["written_or_tuned_against"]
+        assert "out-of-sample" in r["written_or_tuned_against"] and "batches 3 to 6" in r["written_or_tuned_against"]
         assert ("IN-SAMPLE" in r["written_or_tuned_against"]) == (rule_id in rule_eval.RULE_HISTORY["engine_change_after_data"]["affects"])
     assert "guess" in per_rule["R-T1486-001"]["written_or_tuned_against"]
     text = rule_eval.markdown(result)
-    assert "Written or tuned against" in text and "Batches 3 and 4 only (out-of-sample)" in text
+    assert "Written or tuned against" in text and "Batches 3 and 4 only" in text and "Batches 5 and 6 only (never seen" in text
 
 
 # ---- pools listed in excluded_from_ml_pools are skipped, the same way as in the loader ----------
@@ -279,3 +279,34 @@ def test_the_cli_reads_the_list_writes_the_names_and_stops_without_a_usable_file
     assert rule_eval.main([*batches, "--recording-tests", str(empty), "--out", str(other)]) == 1
     assert "fim-test-only" in capsys.readouterr().err
     assert not (other / "rule_eval.json").exists()
+
+
+# ---- streaming gives the same alerts, and batches 5 and 6 have their own columns ----------------------
+
+
+def test_the_streamed_replay_raises_exactly_the_alerts_of_a_plain_sorted_replay(export):
+    from contracts.validate_samples import load_validators
+    from detection.behaviour import RuleEngine, sort_events
+    from detection.timeline import read_jsonl
+    folder = export / "batch-1" / "s1-attack"
+    valid = load_validators()["event"].is_valid
+    events = [e for name in ("events.jsonl", "fim.jsonl") for e in read_jsonl(folder / name)[0] if valid(e)]
+    engine = RuleEngine()
+    plain = [(a["rule_id"], a["ts"]) for e in sort_events(events) for a in engine.process(e)]
+    streamed = rule_eval.evaluate_session(folder, export / "batch-1-labels", 1)
+    assert plain and [(a["rule_id"], a["ts"]) for a in streamed["alerts"]] == plain
+    assert streamed["events"] == len(events) and streamed["skipped_invalid_events"] == 0
+
+
+def test_batches_5_and_6_are_reported_as_never_seen(export):
+    for batch in (5, 6):
+        make_session(export, f"s{batch}-attack", attack_recording(), batch=batch, technique="T1486")
+        make_session(export, f"s{batch}-benign", benign_recording(), batch=batch, malicious=False)
+    result = rule_eval.evaluate(spec(export, (1, 3, 5, 6)), only_labelled=False)
+    sm = result["summary"]
+    assert sm["per_technique"]["T1486"]["detected_batches_5_6"] == {"detected": 2, "sessions": 2}
+    assert sm["per_technique"]["T1486"]["detected_out_of_sample_batches_3_4"] == {"detected": 1, "sessions": 1}
+    assert sm["per_rule"]["R-T1486-001"]["fired_in_test_part_of_own_batches_5_6"] == {"fired": 2, "sessions": 2}
+    assert sm["benign_sessions_with_any_alert_batches_5_6"] == {"with_alert": 0, "sessions": 2}
+    assert "NEVER SEEN" in result["batch_status"]["5"] and "NEVER SEEN" in result["batch_status"]["6"]
+    assert "OUT-OF-SAMPLE" in result["batch_status"]["3"] and "NEVER SEEN" not in result["batch_status"]["3"]

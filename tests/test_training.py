@@ -703,7 +703,7 @@ def test_the_comparison_tables_show_counts_with_intervals_for_each_report(export
     text = compare.markdown({"A": first, "B": second})
     assert "| A | B |" in text.replace("| complete model, summed over the held-out batches | A | B |", "| A | B |")
     assert text.count("95% CI") > 20 and "NOT in recall" in text and "Threshold chosen on training folds" in text
-    assert "T1003.001 score (events)" in text
+    assert "Limited trees: technique score (events)" in text
 
 
 # ---- T1003.001 is left out of training by default ------------------------------------------
@@ -807,7 +807,7 @@ def test_a_tiny_attack_tree_of_another_technique_is_not_limited_and_stays_in_tra
 
 
 def test_the_limited_techniques_are_a_list_of_techniques_not_a_size_limit():
-    assert dataset.LIMITATION_TECHNIQUES == ("T1003.001",)
+    assert dataset.LIMITATION_TECHNIQUES == ("T1003.001", "T1105")
     import inspect
     source = inspect.getsource(dataset.Tree.limited.fget)
     assert "LIMITATION_TECHNIQUES" in source and "n_events" not in source and "MIN_SNAPSHOT_EVENTS" not in source
@@ -979,3 +979,179 @@ def test_the_default_recording_tests_path_is_track_as_file():
              + inspect.getsource(dataset.load_batch) + inspect.getsource(dataset.pool_excluded_sessions)
              + inspect.getsource(train.prepare))
     assert "fim-test-only" not in logic and "fim-test-only" not in dataset.KNOWN_POOLS
+
+
+# ---- T1105 is limited too, by technique -----------------------------------------------------
+
+
+def two_event_recording() -> Recording:
+    """cmd.exe starting and stopping: what the T1105 test part of batch 6 is, with no download in it."""
+    recording = Recording()
+    shell = P(200, 100, "C:\\Windows\\System32\\cmd.exe", "cmd.exe")
+    recording.start(shell, 1.0)
+    recording.stop(shell, 1.1)
+    return recording
+
+
+def test_t1105_trees_are_limited_by_technique_whatever_their_size(export):
+    make_session(export, "s1-t1105-small", two_event_recording(), batch=1, technique="T1105")
+    make_session(export, "s2-t1105-big", powershell_startup_recording(40), batch=2, technique="T1105")
+    batches = {n: trees_of(export, n) for n in (1, 2, 3)}
+    small = next(t for t in batches[1] if t.row["session_id"] == "s1-t1105-small" and t.positive)
+    big = next(t for t in batches[2] if t.row["session_id"] == "s2-t1105-big" and t.positive)
+    assert small.row["n_events"] == 2 and big.row["n_events"] == 40
+    for tree in (small, big):
+        assert tree.limited and tree in dataset.limited_trees(batches[1] + batches[2])
+        assert tree not in dataset.training_trees(batches, [1, 2, 3])          # left out of training
+        assert tree in dataset.training_trees(batches, [1, 2, 3], include_limited=True)
+        assert all(tree not in group for group in dataset.evaluation_trees(batches[tree.row["batch"]]))  # and out of recall
+    assert "provisional" in dataset.LIMITATION_REASONS["T1105"] and set(dataset.LIMITATION_REASONS) == set(dataset.LIMITATION_TECHNIQUES)
+
+
+def test_t1105_is_reported_apart_with_its_event_count_and_its_reason(export, monkeypatch):
+    make_session(export, "s1-t1105", two_event_recording(), batch=1, technique="T1105")
+    batches, _, skipped, left_out = train.prepare(spec(export), only_labelled=False, excluded_pools=())
+    header, _ = train.report_header(batches, skipped, left_out, False, (), None)
+    assert header["documented_limitation"]["techniques"] == ["T1003.001", "T1105"]
+    assert set(header["documented_limitation"]["reasons"]) == {"T1003.001", "T1105"}
+    assert "by technique and never by size" in header["documented_limitation"]["note"]
+    tree = next(t for t in batches[1] if t.limited)
+    monkeypatch.setattr(train.model_module, "predict", lambda booster, rows: [0.41] * len(rows))  # no model is fitted
+    result = train.evaluate_limited(None, [tree], 0.5)
+    assert result["by_technique"] == {"T1105": {
+        "trees": 1, "items": [{"session": "s1-t1105", "technique": "T1105", "n_events": 2, "score": 0.41}],
+        "flagged": {"0.5": 0, "0.8": 0}}}
+    row = next(r for r in dataset.balance_table(batches) if r["batch"] == 1 and r["group"] == "training")
+    assert row["documented_limitation_trees"] == 1 and row["positive_trees"] == 1
+
+
+# ---- events are dropped after the snapshots, never before ---------------------------------------
+
+
+def test_dropping_events_keeps_every_snapshot_and_loses_nothing_that_is_used(export):
+    kept = {n: dataset.load_batch(n, export / f"batch-{n}", export / f"batch-{n}-labels") for n in (1, 2, 3)}
+    dropped = {n: dataset.load_batch(n, export / f"batch-{n}", export / f"batch-{n}-labels", keep_events=False) for n in (1, 2, 3)}
+    for n in (1, 2, 3):
+        assert [t.row for t in dropped[n]] == [t.row for t in kept[n]]
+        for old, new in zip(kept[n], dropped[n]):
+            assert new.events == [] and new.events_dropped
+            if new.usable and not new.limited:
+                assert dataset.snapshot_rows(new) == dataset.snapshot_rows(old)  # same snapshots, made at load
+    assert dataset.snapshot_training_rows(dataset.training_trees(dropped, [1, 2, 3])) == \
+        dataset.snapshot_training_rows(dataset.training_trees(kept, [1, 2, 3]))
+
+
+def test_asking_for_snapshots_of_a_tree_that_never_got_them_raises_instead_of_returning_nothing(with_lsass):
+    dropped = dataset.load_batch(1, with_lsass / "batch-1", with_lsass / "batch-1-labels", keep_events=False)
+    unobserved = next(t for t in dropped if not t.usable)  # its start was not seen: never trained on, never tested
+    assert unobserved.snapshot_cache is None and unobserved.events_dropped
+    with pytest.raises(DatasetError, match="events were dropped"):
+        dataset.snapshot_rows(unobserved)
+    # Every usable tree has its snapshots, the limited ones too (they are needed if they are put back).
+    assert all(t.snapshot_cache for t in dropped if t.usable)
+    assert any(t.limited and t.snapshot_cache for t in dropped)
+
+
+def test_a_real_run_drops_the_events_of_every_tree(export):
+    batches, _, _, _ = train.prepare(spec(export), only_labelled=False, excluded_pools=())
+    assert all(t.events == [] and t.events_dropped for trees in batches.values() for t in trees)
+    assert all(t.snapshot_cache is not None for trees in batches.values() for t in trees if t.usable)
+
+
+# ---- a session too large to replay is named, not silently skipped ---------------------------------
+
+
+def test_a_session_over_the_replay_limit_is_named_and_not_replayed(export, monkeypatch):
+    monkeypatch.setattr(train, "REPLAY_MAX_EVENTS", 5)
+    result = train.alert_time_skew(None, [export / "batch-1" / "s1-attack", export / "batch-1" / "s1-benign"])
+    assert [i["session"] for i in result["sessions_not_replayed"]] == ["s1-attack", "s1-benign"]
+    assert all(i["events"] > 5 and i["limit"] == 5 for i in result["sessions_not_replayed"])
+    assert result["alerts_scored"] == 0
+    assert train.count_lines(export / "batch-1" / "s1-attack" / "events.jsonl") > 5 and train.count_lines(export / "nowhere") == 0
+
+
+# ---- what the benign training rows are made of ----------------------------------------------------
+
+
+def fake_tree(session, activity, n_trees, rows_per_tree, events=10, batch=6, positive=False):
+    made = []
+    for i in range(n_trees):
+        row = {"session_id": session, "activity": activity, "batch": batch, "n_events": events, "tree_id": f"{session}:{i}",
+               "label": "malicious" if positive else "benign"}
+        tree = dataset.Tree(row, [])
+        tree.snapshot_cache = [(0.5 * (j + 1), row) for j in range(rows_per_tree)]
+        made.append(tree)
+    return made
+
+
+def test_the_composition_says_how_much_one_session_contributes():
+    trees = (fake_tree("update", "windows-update", 1, 5, events=741_055) + fake_tree("normal", "normal-use", 99, 3)
+             + fake_tree("attack", None, 2, 2, positive=True))
+    comp = train.composition(trees)
+    assert comp["benign_complete_rows"] == 100 and comp["benign_snapshot_rows"] == 5 + 99 * 3
+    top = comp["largest_sessions"]
+    assert [e["session"] for e in top] == ["normal", "update"]  # the attack session's trees are not benign rows
+    update = top[1]
+    assert update["share_of_benign_complete_rows"] == {"of": 100, "k": 1} and update["share_of_benign_snapshot_rows"] == {"of": 302, "k": 5}
+    assert update["largest_tree_events"] == 741_055
+    assert comp["by_activity"]["windows-update"] == {"sessions": 1, "trees": 1, "snapshot_rows": 5}
+
+
+def test_the_report_text_shows_the_composition_and_the_peak_memory():
+    assert isinstance(train.peak_memory_mb(), int) and train.peak_memory_mb() > 0
+    comp = train.composition(fake_tree("update", "windows-update", 1, 5) + fake_tree("normal", "normal-use", 9, 3))
+    lines = train.composition_lines({"final_training_composition": comp, "peak_memory_mb": 1234})
+    text = "\n".join(lines)
+    assert "What the benign training rows are made of (final model): 10 trees, 32 snapshot rows" in text
+    assert "update (windows-update, batch 6): trees 1 of 10 (10%, 95% CI 1.8% to 40.4%); snapshot rows 5 of 32" in text
+    assert "Peak memory of this run: 1234 MB." in text
+    assert train.composition_lines({}) == []
+
+
+# ---- a first attempt with no session.json, left out on purpose (batch 3 of the real data) ---------
+
+
+def make_first_attempt(export: Path, batch=3, name="s3-first-attempt-nometa") -> Path:
+    """A folder with events and nothing else: no session.json, no labels. Batch 3 has one."""
+    folder = export / f"batch-{batch}" / name
+    folder.mkdir(parents=True)
+    (folder / "events.jsonl").write_bytes(b'{"event_id": "x"}\n')
+    return folder
+
+
+def test_a_folder_with_no_session_json_is_left_out_by_only_labelled_without_stopping_the_run(export):
+    make_first_attempt(export)
+    batches, folders, no_labels, left_out = train.prepare(spec(export), only_labelled=True, excluded_pools=FIM_POOL)
+    assert "s3-first-attempt-nometa" in no_labels[3]  # named, as left out for having no labels
+    assert "s3-first-attempt-nometa" not in {p.name for p in folders[3]}
+    assert "s3-first-attempt-nometa" not in {t.row["session_id"] for t in batches[3]}
+    assert left_out[3] == []  # its pool is unknown, so it is not claimed to be an excluded one
+    # The same goes for the rule evaluation.
+    result = rule_eval_module().evaluate(spec(export), only_labelled=True, excluded_pools=FIM_POOL)
+    assert "s3-first-attempt-nometa" not in {s["session_id"] for s in result["sessions"]}
+
+
+def test_without_only_labelled_such_a_folder_still_stops_the_run(export):
+    make_first_attempt(export)
+    with pytest.raises(DatasetError, match="cannot read the pool"):
+        train.prepare(spec(export), only_labelled=False, excluded_pools=FIM_POOL)
+
+
+def test_a_labelled_session_with_a_broken_session_json_still_stops_the_run_under_only_labelled(export):
+    (export / "batch-1" / "s1-attack" / "session.json").write_text("{broken", encoding="utf-8")
+    with pytest.raises(DatasetError, match="cannot read the pool"):
+        train.prepare(spec(export), only_labelled=True, excluded_pools=FIM_POOL)
+
+
+def test_the_listing_helpers_do_not_claim_anything_about_an_unreadable_pool(export):
+    folder = make_first_attempt(export)
+    assert dataset.safe_pool(folder) is None
+    assert dataset.pool_excluded_sessions(export / "batch-3", FIM_POOL) == []
+    assert dataset.unlabelled_sessions(export / "batch-3", export / "batch-3-labels", FIM_POOL) == ["s3-first-attempt-nometa"]
+    with pytest.raises(DatasetError, match="cannot read the pool"):
+        dataset.require_known_pool(folder)  # but loading it is never allowed
+
+
+def rule_eval_module():
+    from detection import rule_eval
+    return rule_eval

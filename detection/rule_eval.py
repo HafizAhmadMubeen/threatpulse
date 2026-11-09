@@ -29,7 +29,6 @@ BATCH_STATUS below, taken from git and from the docs, and printed with every rep
 """
 
 import argparse
-import csv
 import hashlib
 import json
 import sys
@@ -37,11 +36,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from contracts.validate_samples import load_validators
-from detection.behaviour import RuleEngine, load_rules, sort_events
-from detection.timeline import parse_ts, read_jsonl
+from detection.behaviour import RuleEngine, load_rules
+from detection.stream import SortedEvents
+from detection.timeline import parse_ts
 from triage.dataset import (DEFAULT_RECORDING_TESTS, DatasetError, load_excluded_pools, pool_excluded_sessions,
                             require_known_pool)
 from triage.dataset import session_folders as dataset_session_folders
+from triage.features import read_label_codes
 from triage.metrics import show
 
 
@@ -65,38 +66,28 @@ BATCH_STATUS = {
        "README's first-real-recordings notes. No rule or threshold changed.",
     2: "SEEN, not tuned: replayed through the orchestrator work, which noted the R-T1486-001 false positive "
        "on the benign zip session. Nothing was changed.",
-    3: "OUT-OF-SAMPLE: not looked at before this evaluation.",
-    4: "OUT-OF-SAMPLE: not looked at before this evaluation.",
+    3: "OUT-OF-SAMPLE: first evaluated in the earlier rule evaluation (results written up, nothing changed).",
+    4: "OUT-OF-SAMPLE: first evaluated in the earlier rule evaluation (results written up, nothing changed).",
+    5: "OUT-OF-SAMPLE, NEVER SEEN: not looked at by anyone before the final run. No rule was changed for it.",
+    6: "OUT-OF-SAMPLE, NEVER SEEN: not looked at by anyone before the final run. No rule was changed for it.",
 }
-OUT_OF_SAMPLE = (3, 4)
+OUT_OF_SAMPLE = (3, 4)   # the figures reported earlier keep their meaning
+NEW_BATCHES = (5, 6)     # first seen in the final run
 
 
 def written_or_tuned_against(rule_id: str) -> str:
     """One line per rule: what it was written from and which batches are in-sample for it."""
     if rule_id in RULE_HISTORY["engine_change_after_data"]["affects"]:
-        return "design and synthetic events; batch 1 IN-SAMPLE (de-duplication fixed after replaying it); batch 2 seen; batches 3 and 4 out-of-sample"
+        return "design and synthetic events; batch 1 IN-SAMPLE (de-duplication fixed after replaying it); batch 2 seen; batches 3 to 6 out-of-sample (5 and 6 never seen before the final run)"
     extra = {
         "R-T1486-001": "; threshold 10 in 30 s is a guess, batch 2's zip false positive was seen and not tuned",
         "R-T1003-002": "; added from the LSA-protection design (PLANNING.md 4.3), not from data",
     }.get(rule_id, "")
-    return f"design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 and 4 out-of-sample{extra}"
+    return f"design and synthetic events; nothing tuned; batches 1 and 2 seen; batches 3 to 6 out-of-sample (5 and 6 never seen before the final run){extra}"
 
 
 class RuleEvalError(ValueError):
     pass
-
-
-def read_labels(path: Path) -> dict[str, dict]:
-    if not path.is_file():
-        return {}
-    with path.open(encoding="utf-8", newline="") as stream:
-        return {row["event_id"]: row for row in csv.DictReader(stream)}
-
-
-def part_of(row: dict | None) -> str:
-    if row is None:
-        return "unlabelled"
-    return row.get("part") or row["label"]
 
 
 def seconds(stamp: str) -> float:
@@ -107,25 +98,30 @@ def evaluate_session(folder: Path, labels_dir: Path, batch: int) -> dict:
     session = json.loads((folder / "session.json").read_text(encoding="utf-8-sig"))
     if session.get("batch") != batch:
         raise RuleEvalError(f"{folder.name}: session.json says batch {session.get('batch')}, expected {batch}")
-    labels = read_labels(labels_dir / folder.name / "labels.csv")
-    if not labels:
+    label_path = labels_dir / folder.name / "labels.csv"
+    codes, table, has_part = read_label_codes(label_path) if label_path.is_file() else ({}, [], False)
+    if not codes:
         raise RuleEvalError(f"{folder.name}: no labels in {labels_dir}")
-    if "part" not in next(iter(labels.values())):
+    if not has_part:
         raise RuleEvalError(f"{folder.name}: labels have no part column")
+
+    def part_of_event(event_id: str) -> str:
+        number = codes.get(event_id)
+        return "unlabelled" if number is None else (table[number][1] or table[number][0])
+
     validator = load_validators()["event"]
-    agent, _ = read_jsonl(folder / "events.jsonl")
-    fim, _ = read_jsonl(folder / "fim.jsonl")
-    events = [e for e in (*agent, *fim) if validator.is_valid(e)]
-    skipped = len(agent) + len(fim) - len(events)  # invalid against the Event schema: counted, never silent
+    # Streamed in time order, never all in memory: a Windows Update session is a million events.
+    stream = SortedEvents([folder / "events.jsonl", folder / "fim.jsonl"], validator.is_valid)
+    skipped = stream.skipped_invalid  # invalid against the Event schema: counted, never silent
     techniques = {rule.id: rule.techniques for rule in load_rules()}
     start, end = seconds(session["start_utc"]), seconds(session["end_utc"])
 
     engine = RuleEngine()
     rows = []
-    for event in sort_events(events):
+    for event in stream:
         for alert in engine.process(event):
             when = seconds(alert["ts"])
-            parts = Counter(part_of(labels.get(i)) for i in alert["evidence_event_ids"])
+            parts = Counter(part_of_event(i) for i in alert["evidence_event_ids"])
             by_window = alert["layer"] == "fim"  # FIM events carry no label
             part = "test" if by_window and start <= when <= end else (
                 "fim-outside-test-window" if by_window else (parts.most_common(1)[0][0] if parts else "none"))
@@ -136,7 +132,7 @@ def evaluate_session(folder: Path, labels_dir: Path, batch: int) -> dict:
                 "techniques": list(techniques.get(alert["rule_id"], ())),
             })
     return {"session_id": session["session_id"], "batch": batch, "label": session["label"],
-            "technique": session.get("technique"), "pool": session["pool"], "events": len(events),
+            "technique": session.get("technique"), "pool": session["pool"], "events": len(stream),
             "skipped_invalid_events": skipped, "rejected": engine.rejected, "alerts": rows}
 
 
@@ -189,6 +185,9 @@ def summarise(sessions: list[dict]) -> dict:
                     continue
                 (fired if a["part"] == "test" else harness if a["part"] == "harness" else background)[a["rule_id"]] += 1
         entry["detected"] = sum(v["detected"] for v in entry["by_batch"].values())
+        entry["detected_batches_5_6"] = {
+            "detected": sum(v["detected"] for b, v in entry["by_batch"].items() if int(b) in NEW_BATCHES),
+            "sessions": sum(v["sessions"] for b, v in entry["by_batch"].items() if int(b) in NEW_BATCHES)}
         entry["detected_out_of_sample_batches_3_4"] = {
             "detected": sum(v["detected"] for b, v in entry["by_batch"].items() if int(b) in OUT_OF_SAMPLE),
             "sessions": sum(v["sessions"] for b, v in entry["by_batch"].items() if int(b) in OUT_OF_SAMPLE)}
@@ -207,6 +206,9 @@ def summarise(sessions: list[dict]) -> dict:
         per_rule[rule_id] = {
             "techniques": techniques,
             "own_technique_sessions": len(own), "fired_in_test_part_of_own": len(fired_own),
+            "fired_in_test_part_of_own_batches_5_6": {
+                "fired": sum(1 for s in fired_own if s["batch"] in NEW_BATCHES),
+                "sessions": sum(1 for s in own if s["batch"] in NEW_BATCHES)},
             "fired_in_test_part_of_own_batches_3_4": {
                 "fired": sum(1 for s in fired_own if s["batch"] in OUT_OF_SAMPLE),
                 "sessions": sum(1 for s in own if s["batch"] in OUT_OF_SAMPLE)},
@@ -214,6 +216,9 @@ def summarise(sessions: list[dict]) -> dict:
             "attack_sessions_total": len(attacks),
             "benign_sessions": len(benign), "benign_sessions_with_alert": len(benign_fired),
             "benign_alerts": sum(1 for s in benign for a in s["alerts"] if a["rule_id"] == rule_id and a["when"] == "in_window"),
+            "benign_sessions_with_alert_batches_5_6": {
+                "with_alert": sum(1 for s in benign_fired if s["batch"] in NEW_BATCHES),
+                "sessions": sum(1 for s in benign if s["batch"] in NEW_BATCHES)},
             "benign_sessions_with_alert_batches_3_4": {
                 "with_alert": sum(1 for s in benign_fired if s["batch"] in OUT_OF_SAMPLE),
                 "sessions": sum(1 for s in benign if s["batch"] in OUT_OF_SAMPLE)},
@@ -231,6 +236,7 @@ def summarise(sessions: list[dict]) -> dict:
     outside_detail = Counter((a["when"], a["rule_id"], s["label"], a["part"]) for s in sessions for a in s["alerts"]
                              if a["when"] != "in_window")
     oos = [v for b, v in by_batch.items() if int(b) in OUT_OF_SAMPLE]
+    new = [v for b, v in by_batch.items() if int(b) in NEW_BATCHES]
     return {
         "attack_sessions": len(attacks), "benign_sessions": len(benign),
         "benign_sessions_with_any_alert": sum(v["with_alert"] for v in by_batch.values()),
@@ -238,6 +244,8 @@ def summarise(sessions: list[dict]) -> dict:
         "benign_sessions_detail": [{"session": s["session_id"], "batch": s["batch"],
                                     "alerts": dict(Counter(a["rule_id"] for a in s["alerts"] if a["when"] == "in_window"))}
                                    for s in benign],
+        "benign_sessions_with_any_alert_batches_5_6": {"with_alert": sum(v["with_alert"] for v in new),
+                                                       "sessions": sum(v["sessions"] for v in new)},
         "benign_sessions_with_any_alert_batches_3_4": {"with_alert": sum(v["with_alert"] for v in oos),
                                                        "sessions": sum(v["sessions"] for v in oos)},
         "alerts_outside_the_window": dict(outside),
@@ -276,28 +284,34 @@ def markdown(result: dict) -> str:
     lines += ["## Sessions left out on purpose", ""] + left_out_lines(result) + [""]
     lines += ["| Batch | Status for the rules |", "|---|---|"] + [f"| {b} | {t} |" for b, t in result["batch_status"].items()]
     lines += ["", "## Per technique: which rules fired in the test part", "",
-              "| Technique | Detected (a rule for it fired in the test part) | Batches 3 and 4 only (out-of-sample) | Rules fired in the test part (alerts) | Harness alerts | Background alerts |",
-              "|---|---|---|---|---|---|"]
+              "| Technique | Detected (a rule for it fired in the test part) | Batches 3 and 4 only | Batches 5 and 6 only (never seen) | Rules fired in the test part (alerts) | Harness alerts | Background alerts |",
+              "|---|---|---|---|---|---|---|"]
     for technique, e in sm["per_technique"].items():
         oos = e["detected_out_of_sample_batches_3_4"]
+        new = e["detected_batches_5_6"]
         fmt = lambda d: ", ".join(f"{k} x{v}" for k, v in d.items()) or "none"  # noqa: E731
         lines.append(f"| {technique} | {show(e['detected'], e['sessions'])} | {show(oos['detected'], oos['sessions']) if oos['sessions'] else 'no sessions'} | "
+                     f"{show(new['detected'], new['sessions']) if new['sessions'] else 'no sessions'} | "
                      f"{fmt(e['rules_fired_in_test_part'])} | {fmt(e['harness_alerts'])} | {fmt(e['background_alerts'])} |")
     lines += ["", "## Per rule", "",
-              "| Rule | Written or tuned against | Techniques | Fired in the test part of its own technique | of which batches 3 and 4 | Cross-fired in another technique's test part | Benign sessions with this rule | Benign alerts | Harness alerts | Background alerts (attack sessions) |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+              "| Rule | Written or tuned against | Techniques | Fired in the test part of its own technique | of which batches 3 and 4 | of which batches 5 and 6 | Cross-fired in another technique's test part | Benign sessions with this rule | Benign alerts | Harness alerts | Background alerts (attack sessions) |",
+              "|---|---|---|---|---|---|---|---|---|---|---|"]
     for rule_id, r in sm["per_rule"].items():
         oos = r["fired_in_test_part_of_own_batches_3_4"]
+        new = r["fired_in_test_part_of_own_batches_5_6"]
         own = show(r["fired_in_test_part_of_own"], r["own_technique_sessions"]) if r["own_technique_sessions"] else "no sessions of its own technique"
         note = " (by time window, FIM has no labels)" if r["placed_by_window_only"] else ""
         lines.append(f"| {rule_id} | {r['written_or_tuned_against']} | {', '.join(r['techniques']) or 'none'} | {own}{note} | "
                      f"{(str(oos['fired']) + ' of ' + str(oos['sessions'])) if oos['sessions'] else 'none'} | "
+                     f"{(str(new['fired']) + ' of ' + str(new['sessions'])) if new['sessions'] else 'none'} | "
                      f"{', '.join(r['cross_fired_in_test_part_of_other_techniques']) or 'none'} | "
                      f"{show(r['benign_sessions_with_alert'], r['benign_sessions'])} | {r['benign_alerts']} | "
                      f"{r['harness_alerts']} | {r['background_alerts_in_attack_sessions']} |")
     lines += ["", "## Benign sessions", "",
               f"Benign sessions with any alert in their window: {show(sm['benign_sessions_with_any_alert'], sm['benign_sessions'])}. "
-              f"Batches 3 and 4 only (out-of-sample): {show(sm['benign_sessions_with_any_alert_batches_3_4']['with_alert'], sm['benign_sessions_with_any_alert_batches_3_4']['sessions'])}.", "",
+              f"Batches 3 and 4 only: {show(sm['benign_sessions_with_any_alert_batches_3_4']['with_alert'], sm['benign_sessions_with_any_alert_batches_3_4']['sessions'])}. "
+              f"Batches 5 and 6 only (never seen before the final run): "
+              f"{show(sm['benign_sessions_with_any_alert_batches_5_6']['with_alert'], sm['benign_sessions_with_any_alert_batches_5_6']['sessions'])}.", "",
               "| Batch | Benign sessions with any alert |", "|---|---|"]
     lines += [f"| {b} | {show(v['with_alert'], v['sessions'])} |" for b, v in sm["benign_by_batch"].items()]
     lines += ["", "| Benign session | Batch | Alerts by rule (in the window) |", "|---|---|---|"]

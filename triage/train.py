@@ -32,6 +32,7 @@ Every result is PRELIMINARY until all 11 batches exist.
 import argparse
 import json
 import logging
+import resource
 import statistics
 import sys
 from pathlib import Path
@@ -41,7 +42,8 @@ from contracts.validate_samples import load_validators
 from detection.timeline import read_jsonl
 from triage import model as model_module
 from triage import score as score_module
-from triage.dataset import (DEFAULT_RECORDING_TESTS, HELD_OUT_TECHNIQUES, LIMITATION_TECHNIQUES, MIN_SNAPSHOT_EVENTS, SNAPSHOT_FRACTIONS,
+from triage.dataset import (DEFAULT_RECORDING_TESTS, HELD_OUT_TECHNIQUES, LIMITATION_REASONS, LIMITATION_TECHNIQUES,
+                            MIN_SNAPSHOT_EVENTS, SNAPSHOT_FRACTIONS,
                             DatasetError, Tree, balance_table, evaluation_trees, limited_trees, load_batch,
                             load_excluded_pools, pool_excluded_sessions, session_folders, snapshot_rows,
                             snapshot_training_rows, training_trees, unlabelled_sessions)
@@ -54,6 +56,9 @@ FIXED_THRESHOLDS = (0.5, 0.8)  # 0.50 = dashboard "alert", 0.80 = policy auto_co
 THRESHOLD_GRID = (0.5, 0.6, 0.7, 0.8, 0.9, 0.95)
 FPR_CAP = 0.02  # at most 2% of benign trees flagged, pooled over the inner folds
 TOP_NEGATIVES = 5
+# The pipeline replay keeps every event of a session in memory (about 3 KB each). A session larger than
+# this is not replayed for the alert-time view, and the report names it.
+REPLAY_MAX_EVENTS = 400_000
 MODES = ("complete", "snapshots")
 
 
@@ -127,12 +132,21 @@ def evaluate_group(booster, trees: list[Tree], chosen: float) -> dict:
 
 
 def evaluate_limited(booster, trees: list[Tree], chosen: float) -> dict:
-    """The documented limitation (T1003.001): scored and listed, never part of recall."""
+    """The documented limitations (T1003.001, T1105): scored and listed, never part of recall.
+    Listed per technique, each tree with its real number of events."""
     scores = model_module.predict(booster, [t.row for t in trees])
     thresholds = sorted({*FIXED_THRESHOLDS, chosen})
+    by_technique = {}
+    for technique in LIMITATION_TECHNIQUES:
+        mine = [(t, s) for t, s in zip(trees, scores) if t.row["technique"] == technique]
+        if mine:
+            by_technique[technique] = {
+                "trees": len(mine), "items": [describe(t, s) for t, s in mine],
+                "flagged": {str(th): sum(1 for _, s in mine if s >= th) for th in thresholds}}
     return {"trees": len(trees),
             "items": [describe(t, s) for t, s in zip(trees, scores)],
-            "flagged": {str(th): sum(1 for s in scores if s >= th) for th in thresholds}}
+            "flagged": {str(th): sum(1 for s in scores if s >= th) for th in thresholds},
+            "by_technique": by_technique}
 
 
 def snapshot_evaluation(booster, trees: list[Tree], snaps: dict[str, list[tuple[float, dict]]]) -> dict:
@@ -185,13 +199,28 @@ def session_events(folder: Path) -> list[dict]:
     return [e for e in (*agent, *fim) if validator.is_valid(e)]
 
 
+def count_lines(path: Path) -> int:
+    """Lines of a file, read in chunks (a session's size without loading it)."""
+    if not path.is_file():
+        return 0
+    total = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(1 << 22):
+            total += chunk.count(b"\n")
+    return total
+
+
 def alert_time_skew(booster, folders: list[Path]) -> dict:
     """The pipeline's own view. Each alert is scored when it fires (a partial tree), and again
     on the whole of the same tree at the end of the recording. Both are label-free: the
     wrapper that runs each test is in both, which is the scorer's real situation. Alerts of
     T1003.001 sessions are counted apart (documented limitation)."""
-    rows = []
+    rows, not_replayed = [], []
     for folder in folders:
+        size = count_lines(folder / "events.jsonl") + count_lines(folder / "fim.jsonl")
+        if size > REPLAY_MAX_EVENTS:  # the replay would hold every event in memory
+            not_replayed.append({"session": folder.name, "events": size, "limit": REPLAY_MAX_EVENTS})
+            continue
         events = session_events(folder)
         result = run_session(folder, scorer=lambda tree: score_module.score_with(booster, tree))
         for alert in result.alerts:
@@ -222,6 +251,7 @@ def alert_time_skew(booster, folders: list[Path]) -> dict:
                                                      "complete_tree": count("malicious", "complete")},
         "documented_limitation_alerts": [{"alert_time": r["alert_time"], "complete": r["complete"]}
                                          for r in rows if r["limitation"]],
+        "sessions_not_replayed": not_replayed,
     }
 
 
@@ -246,6 +276,14 @@ def pooled_summary(report_folds: list[dict], mode: str) -> dict:
         "flagged_at_0.5": sum(g["flagged"]["0.5"] for g in limited),
         "flagged_at_0.8": sum(g["flagged"]["0.8"] for g in limited),
         "scores": [i["score"] for g in limited for i in g["items"]],
+        "by_technique": {
+            technique: {
+                "trees": sum(g["by_technique"][technique]["trees"] for g in limited if technique in g["by_technique"]),
+                "flagged_at_0.5": sum(g["by_technique"][technique]["flagged"]["0.5"] for g in limited if technique in g["by_technique"]),
+                "flagged_at_0.8": sum(g["by_technique"][technique]["flagged"]["0.8"] for g in limited if technique in g["by_technique"]),
+                "items": [{"score": i["score"], "n_events": i["n_events"]} for g in limited
+                          if technique in g["by_technique"] for i in g["by_technique"][technique]["items"]],
+            } for technique in LIMITATION_TECHNIQUES if any(technique in g["by_technique"] for g in limited)},
     }
     flagged = of = early_only = benign_of = 0
     for m in models:
@@ -259,6 +297,7 @@ def pooled_summary(report_folds: list[dict], mode: str) -> dict:
     out["benign_flagged_early_only_25_to_75_percent"] = {"flagged": early_only, "of": benign_of}
     alerts = [m["alert_time_skew"] for m in models]
     out["alert_time"] = {
+        "sessions_not_replayed": [item for a in alerts for item in a.get("sessions_not_replayed", [])],
         "benign_session_alerts_at_or_above_0.8": {"alert_time": sum(a["benign_session_alerts_at_or_above_0.8"]["alert_time"] for a in alerts),
                                                   "of": sum(a["alerts_in_benign_sessions"] for a in alerts)},
         "malicious_session_alerts_at_or_above_0.8": {"alert_time": sum(a["malicious_session_alerts_at_or_above_0.8"]["alert_time"] for a in alerts),
@@ -275,12 +314,47 @@ def prepare(batches_spec: list[tuple[int, Path, Path]], only_labelled: bool,
     them too), the sessions left out for having no labels, and the sessions left out because
     their pool is in excluded_from_ml_pools. A session of an excluded pool is skipped before its
     labels are looked at, and it reaches neither training nor evaluation."""
-    batches = {n: load_batch(n, sessions, labels, only_labelled, excluded_pools) for n, sessions, labels in batches_spec}
+    batches = {n: load_batch(n, sessions, labels, only_labelled, excluded_pools, keep_events=False)
+               for n, sessions, labels in batches_spec}
     folders = {n: session_folders(sessions, labels, only_labelled, excluded_pools) for n, sessions, labels in batches_spec}
     no_labels = ({n: unlabelled_sessions(sessions, labels, excluded_pools) for n, sessions, labels in batches_spec}
                  if only_labelled else {})
     pool_left_out = {n: pool_excluded_sessions(sessions, excluded_pools) for n, sessions, _ in batches_spec}
     return batches, folders, no_labels, pool_left_out
+
+
+def composition(trees: list[Tree]) -> dict:
+    """What the benign training rows are made of, by session and by activity, for the complete
+    model (one row per tree) and the snapshot model (a few per tree). Answers whether one big
+    session, such as the Windows Update one, dominates."""
+    sessions: dict[str, dict] = {}
+    for tree in trees:
+        if tree.positive:
+            continue
+        entry = sessions.setdefault(tree.row["session_id"], {
+            "session": tree.row["session_id"], "activity": tree.row["activity"] or None, "batch": tree.row["batch"],
+            "trees": 0, "snapshot_rows": 0, "largest_tree_events": 0})
+        entry["trees"] += 1
+        entry["snapshot_rows"] += len(snapshot_rows(tree))
+        entry["largest_tree_events"] = max(entry["largest_tree_events"], tree.row["n_events"])
+    total_trees = sum(e["trees"] for e in sessions.values())
+    total_snapshots = sum(e["snapshot_rows"] for e in sessions.values())
+    for e in sessions.values():
+        e["share_of_benign_complete_rows"] = {"of": total_trees, "k": e["trees"]}
+        e["share_of_benign_snapshot_rows"] = {"of": total_snapshots, "k": e["snapshot_rows"]}
+    ordered = sorted(sessions.values(), key=lambda e: -e["snapshot_rows"])
+    by_activity: dict[str, dict] = {}
+    for e in ordered:
+        a = by_activity.setdefault(e["activity"] or "none", {"sessions": 0, "trees": 0, "snapshot_rows": 0})
+        a["sessions"] += 1
+        a["trees"] += e["trees"]
+        a["snapshot_rows"] += e["snapshot_rows"]
+    return {"benign_complete_rows": total_trees, "benign_snapshot_rows": total_snapshots,
+            "largest_sessions": ordered[:5], "by_activity": by_activity}
+
+
+def peak_memory_mb() -> int:
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)  # Linux reports kilobytes
 
 
 def report_header(batches: dict, skipped: dict, pool_left_out: dict, include_limited_in_training: bool,
@@ -298,8 +372,9 @@ def report_header(batches: dict, skipped: dict, pool_left_out: dict, include_lim
         "documented_limitation": {
             "in_training": include_limited_in_training,
             "techniques": list(LIMITATION_TECHNIQUES),
-            "note": "LSA protection blocks the dump, so the test part has about 2 events. Reported on its own, "
-                    "never counted toward recall. "
+            "reasons": LIMITATION_REASONS,
+            "note": "The test part of these techniques holds almost nothing of the technique (see reasons). "
+                    "Reported on its own, by technique and never by size, and never counted toward recall. "
                     + ("These trees are IN training in this run (--include-limited-in-training)."
                        if include_limited_in_training else
                        "These trees are LEFT OUT of training (the default): a tree of about 2 events has no behaviour to learn."),
@@ -339,7 +414,8 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
         ordinary, held_out = evaluation_trees(batches[test])
         limited = limited_trees(batches[test])
         snaps = {t.row["tree_id"]: snapshot_rows(t) for t in ordinary + held_out}
-        fold = {"train_batches": train_numbers, "test_batch": test, "models": {}}
+        fold = {"train_batches": train_numbers, "test_batch": test, "training_composition": composition(trained),
+                "models": {}}
         for mode in MODES:
             chosen = choose_threshold(*inner_scores(mode, batches, train_numbers, include_limited_in_training))
             booster, info = model_module.train(training_rows(mode, trained))
@@ -358,6 +434,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
             }
         report["folds"].append(fold)
     report["pooled"] = {mode: pooled_summary(report["folds"], mode) for mode in MODES}
+    report["final_training_composition"] = composition(all_training)
 
     final_threshold = choose_threshold(*out_of_fold["snapshots"])
     booster, info = model_module.train(training_rows("snapshots", all_training))
@@ -373,6 +450,7 @@ def run(batches_spec: list[tuple[int, Path, Path]], save_to: Path | None, only_l
         "note": "The snapshot model, trained on every training-pool tree of the labelled batches. It has no "
                 "held-out evaluation of its own: the fold results above are the evidence, and they are preliminary.",
     }
+    report["peak_memory_mb"] = peak_memory_mb()
     if save_to is not None:
         path = model_module.save(booster, save_to, {
             "status": report["status"], "trained_on_batches": numbers, "training": "prefix snapshots",
@@ -409,8 +487,9 @@ def pooled_lines(pooled: dict) -> list[str]:
             lines.append(f"    {label}, {key.replace('_', ' ')}: attacks caught {show(c['tp'], c['tp'] + c['fn'])}; "
                          f"benign flagged {show(c['fp'], c['fp'] + c['tn'])}")
     lim = pooled["documented_limitation"]
-    lines.append(f"    T1003.001 (documented limitation, NOT in recall): flagged at 0.5 {lim['flagged_at_0.5']} of {lim['trees']}, "
-                 f"at 0.8 {lim['flagged_at_0.8']} of {lim['trees']}, scores {lim['scores']}")
+    for technique, t in lim.get("by_technique", {}).items():
+        lines.append(f"    {technique} (documented limitation, NOT in recall): flagged at 0.5 {t['flagged_at_0.5']} of {t['trees']}, "
+                     f"at 0.8 {t['flagged_at_0.8']} of {t['trees']}, (score, events) {[(i['score'], i['n_events']) for i in t['items']]}")
     e = pooled["attacks_flagged_early_25_to_75_percent"]
     b = pooled["benign_flagged_early_only_25_to_75_percent"]
     lines.append(f"    attacks still flagged at 0.5 on 25 to 75% of their span: {show(e['flagged'], e['of'])}; "
@@ -435,15 +514,32 @@ def left_out_lines(report: dict) -> list[str]:
     return lines
 
 
+def composition_lines(report: dict) -> list[str]:
+    """What the benign training rows are made of, and the peak memory of the run."""
+    lines = []
+    comp = report.get("final_training_composition")
+    if comp:
+        lines += ["", f"What the benign training rows are made of (final model): {comp['benign_complete_rows']} trees, "
+                      f"{comp['benign_snapshot_rows']} snapshot rows"]
+        for e in comp["largest_sessions"]:
+            lines.append(f"  {e['session']} ({e['activity']}, batch {e['batch']}): "
+                         f"trees {show(e['trees'], comp['benign_complete_rows'])}; snapshot rows "
+                         f"{show(e['snapshot_rows'], comp['benign_snapshot_rows'])}; largest tree {e['largest_tree_events']} events")
+    if "peak_memory_mb" in report:
+        lines += ["", f"Peak memory of this run: {report['peak_memory_mb']} MB."]
+    return lines
+
+
 def text_report(report: dict) -> str:
     lines = [report["status"], f"Scheme: {report['scheme']}. Held-out techniques: {report['held_out_techniques']} "
                                f"({report['held_out_note']}).",
-             f"T1003.001 is a documented limitation: {report['documented_limitation']['note']}", ""]
+             f"Documented limitations {report['documented_limitation']['techniques']}: {report['documented_limitation']['note']}"]
+    lines += [f"  {t}: {why}" for t, why in report["documented_limitation"].get("reasons", {}).items()] + [""]
     lines += left_out_lines(report)
-    lines += ["", "Class balance (usable trees: start observed, harness left out; positives exclude T1003.001):"]
+    lines += ["", "Class balance (usable trees: start observed, harness left out; positives exclude the documented-limitation trees):"]
     for row in report["balance"]:
         lines.append(f"  batch {row['batch']} {row['group']:9} attacks {row['positive_trees']:3}  "
-                     f"T1003.001 {row['documented_limitation_trees']}  benign {row['negative_trees']:4}  "
+                     f"limited {row['documented_limitation_trees']}  benign {row['negative_trees']:4}  "
                      f"dropped (no start event) {row['unobserved_start_dropped']}")
     for fold in report["folds"]:
         lines += ["", f"=== Train on batches {fold['train_batches']}, test on batch {fold['test_batch']} ==="]
@@ -462,10 +558,9 @@ def text_report(report: dict) -> str:
                     lines.append("    " + confusion_line(c))
                 for p in group["positive_scores"]:
                     lines.append(f"    attack {p['technique']}: score {p['score']} ({p['n_events']} events)")
-            lim = m["documented_limitation"]
-            if lim["trees"]:
-                lines.append(f"  T1003.001 (documented limitation, NOT in recall): {[(i['score'], i['n_events']) for i in lim['items']]} "
-                             f"(score, events); flagged at 0.5 {lim['flagged']['0.5']} of {lim['trees']}, at 0.8 {lim['flagged']['0.8']} of {lim['trees']}")
+            for technique, t in m["documented_limitation"].get("by_technique", {}).items():
+                lines.append(f"  {technique} (documented limitation, NOT in recall): {[(i['score'], i['n_events']) for i in t['items']]} "
+                             f"(score, events); flagged at 0.5 {t['flagged']['0.5']} of {t['trees']}, at 0.8 {t['flagged']['0.8']} of {t['trees']}")
             snap = m["snapshots_of_test_trees"]
             lines.append("  snapshots of test trees, by how much of the tree is seen (at 0.5):")
             for b in snap["by_fraction"]:
@@ -479,6 +574,9 @@ def text_report(report: dict) -> str:
                              f"benign median {neg.get('median_abs_diff')} max {neg.get('max_abs_diff')}, "
                              f"early-only {show(s['benign_flagged_early_only']['flagged'], s['benign_flagged_early_only']['of'])}")
             a = m["alert_time_skew"]
+            for item in a.get("sessions_not_replayed", []):
+                lines.append(f"  NOT replayed for alert-time scores (too large to hold in memory): {item['session']}, "
+                             f"{item['events']} events (limit {item['limit']})")
             lines.append(f"  pipeline replay, alert-time vs complete tree ({a['alerts_scored']} scored alerts, median |diff| {a['median_abs_diff']}, max {a['max_abs_diff']}):")
             lines.append(f"    benign sessions: at or above 0.8 at alert time "
                          f"{show(a['benign_session_alerts_at_or_above_0.8']['alert_time'], a['alerts_in_benign_sessions'])}, "
@@ -490,6 +588,7 @@ def text_report(report: dict) -> str:
     for mode in MODES:
         lines.append(f"  {mode} model:")
         lines += pooled_lines(report["pooled"][mode])
+    lines += composition_lines(report)
     final = report["final_model"]
     p = final["proposed_threshold"]
     lines += ["", final["note"],

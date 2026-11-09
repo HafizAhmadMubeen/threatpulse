@@ -23,15 +23,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from detection.timeline import parse_ts
-from triage.features import SessionError, extract_session_trees, order_key, tree_feature_row
+from triage.features import SessionError, iter_session_trees, order_key, tree_feature_row
 
 log = logging.getLogger(__name__)
 
 HELD_OUT_TECHNIQUES = ("T1053.005", "T1685", "T1218.011")
 HELD_OUT_POOL = "held-out"
-# Documented limitation: LSA protection blocks the dump, so the test part has almost nothing
-# to see (2 events). It is reported on its own and never counts toward the model's recall.
-LIMITATION_TECHNIQUES = ("T1003.001",)
+# Documented limitations. The test part of these techniques holds almost nothing of the
+# technique, so there is no behaviour to learn or to miss. They are reported on their own, left
+# out of training, and never count toward the model's recall. By TECHNIQUE, never by size.
+#   T1003.001  LSA protection blocks the dump, so the test part is the launcher's ordinary
+#              behaviour (about 2 events, or 56 of plain PowerShell start-up).
+#   T1105      PROVISIONAL. The two T1105 sessions of batch 6 have a test part of 2 events (cmd.exe
+#              starting and stopping), with no download behaviour in it. If a later recording shows
+#              a real download in the test part, this entry has to be revisited.
+LIMITATION_TECHNIQUES = ("T1003.001", "T1105")
+LIMITATION_REASONS = {
+    "T1003.001": "LSA protection blocks the dump, so the test part holds only the launcher's ordinary behaviour",
+    "T1105": "provisional: the T1105 sessions of batch 6 have a 2-event test part (cmd.exe start and stop) with no "
+             "download behaviour",
+}
 # The pools the recorded data has used so far. Any other pool must be listed in
 # excluded_from_ml_pools, or the loader stops.
 KNOWN_POOLS = ("training-technique", HELD_OUT_POOL, "unassigned")
@@ -57,6 +68,7 @@ class Tree:
     row: dict
     events: list[dict]
     snapshot_cache: list | None = field(default=None, repr=False, compare=False)
+    events_dropped: bool = field(default=False, repr=False, compare=False)  # to save memory, once snapshots were made
 
     @property
     def positive(self) -> bool:
@@ -119,6 +131,16 @@ def require_known_pool(folder: Path) -> str:
     return pool
 
 
+def safe_pool(folder: Path) -> str | None:
+    """The pool, or None when it cannot be read. Only for LISTING sessions (what is left out, and
+    why): nothing is ever assumed harmless from None. A session is loaded through
+    require_known_pool, which stops the run when the pool cannot be read."""
+    try:
+        return session_pool(folder)
+    except DatasetError:
+        return None
+
+
 def all_session_folders(sessions_dir: Path) -> list[Path]:
     return sorted(p for p in sessions_dir.iterdir() if (p / "events.jsonl").is_file())
 
@@ -127,7 +149,7 @@ def pool_excluded_sessions(sessions_dir: Path, excluded_pools: tuple[str, ...]) 
     """The sessions skipped because of their pool, by name, so a report can list them."""
     if not excluded_pools:
         return []
-    found = [(p.name, session_pool(p)) for p in all_session_folders(sessions_dir)]
+    found = [(p.name, safe_pool(p)) for p in all_session_folders(sessions_dir)]
     return [{"session": name, "pool": pool} for name, pool in found if pool in excluded_pools]
 
 
@@ -137,7 +159,7 @@ def unlabelled_sessions(sessions_dir: Path, labels_dir: Path, excluded_pools: tu
     Sessions of an excluded pool are not counted here: they are reported for their pool."""
     return [p.name for p in all_session_folders(sessions_dir)
             if not (labels_dir / p.name / "labels.csv").is_file()
-            and not (excluded_pools and session_pool(p) in excluded_pools)]
+            and not (excluded_pools and safe_pool(p) in excluded_pools)]
 
 
 def session_folders(sessions_dir: Path, labels_dir: Path | None = None, only_labelled: bool = False,
@@ -147,12 +169,14 @@ def session_folders(sessions_dir: Path, labels_dir: Path | None = None, only_lab
     session without labels is then left out on purpose, and a missing labels.csv is no error.
     Without it (the default) a session without labels stops the run."""
     folders = all_session_folders(sessions_dir)
-    if excluded_pools:
-        folders = [p for p in folders if session_pool(p) not in excluded_pools]
     if only_labelled:
+        # First: a session without labels is decided out whatever its pool, and it may be a
+        # first attempt that has no session.json at all (batch 3 has one).
         if labels_dir is None:
             raise DatasetError("only_labelled needs a labels folder")
         folders = [p for p in folders if (labels_dir / p.name / "labels.csv").is_file()]
+    if excluded_pools:
+        folders = [p for p in folders if safe_pool(p) not in excluded_pools]
     if not folders:
         raise DatasetError(f"{sessions_dir}: no session folders")
     return folders
@@ -170,22 +194,31 @@ def check_pool(tree: Tree) -> None:
 
 
 def load_batch(number: int, sessions_dir: Path, labels_dir: Path, only_labelled: bool = False,
-               excluded_pools: tuple[str, ...] = ()) -> list[Tree]:
+               excluded_pools: tuple[str, ...] = (), keep_events: bool = True) -> list[Tree]:
+    """The trees of a batch, one session at a time and one tree at a time.
+
+    With `keep_events=False` (what a real run uses) each usable tree's snapshots are made as soon
+    as the tree is read and its events are dropped at once, so memory holds one tree's events at a
+    time and not the batch's. A tree whose events were dropped cannot make snapshots again: asking
+    raises instead of returning nothing. With the default, events stay (tests, small data)."""
     trees: list[Tree] = []
     for folder in session_folders(sessions_dir, labels_dir, only_labelled, excluded_pools):
         require_known_pool(folder)
         try:
-            pairs = extract_session_trees(folder, labels_dir, from_start=True)
+            for row, events in iter_session_trees(folder, labels_dir, from_start=True):
+                if row["batch"] != number:
+                    raise DatasetError(f"{folder.name}: session.json says batch {row['batch']}, expected {number}")
+                if row["harness_excluded"] != 1:
+                    raise DatasetError(f"{folder.name}: labels have no part column, so the harness was not left out")
+                tree = Tree(row, events if row["observed_start"] == 1 else [])  # events only for usable trees
+                check_pool(tree)
+                if not keep_events:
+                    if tree.usable:  # every tree that can be trained on or tested, limited ones too
+                        snapshot_rows(tree)
+                    tree.events, tree.events_dropped = [], True
+                trees.append(tree)
         except SessionError as error:
             raise DatasetError(str(error)) from error
-        for row, events in pairs:
-            if row["batch"] != number:
-                raise DatasetError(f"{folder.name}: session.json says batch {row['batch']}, expected {number}")
-            if row["harness_excluded"] != 1:
-                raise DatasetError(f"{folder.name}: labels have no part column, so the harness was not left out")
-            tree = Tree(row, events if row["observed_start"] == 1 else [])  # events only for usable trees
-            check_pool(tree)
-            trees.append(tree)
     return trees
 
 
@@ -234,6 +267,9 @@ def snapshot_rows(tree: Tree) -> list[tuple[float, dict]]:
     kept). Built from the tree's own events: no label and no harness is read here."""
     if tree.snapshot_cache is not None:
         return tree.snapshot_cache
+    if tree.events_dropped:
+        raise DatasetError(f"{tree.row['tree_id']}: its events were dropped to save memory before its snapshots "
+                           "were made, so they cannot be made now")
     ordered = sorted(tree.events, key=order_key)
     if not ordered:
         return []
