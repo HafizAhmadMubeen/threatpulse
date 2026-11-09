@@ -19,6 +19,7 @@ agent/build/
 
 # Claude Code personal settings (.claude/settings.json stays tracked)
 .claude/settings.local.json
+.claude/*.tmp.*
 
 # Data and logs
 data/raw/
