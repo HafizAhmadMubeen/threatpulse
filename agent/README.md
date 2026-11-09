@@ -185,6 +185,7 @@ These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A p
 | `tools/run_batch.ps1` | Runs one batch from `tools/batch_plan.json` in its fixed order, and pauses before each manual benign session |
 | `tools/record_session.ps1` | Records one session, and writes `session.json` |
 | `tools/vm_t1486_script.ps1` | Our harmless T1486 test, on dummy files only |
+| `tools/vm_fim_session.ps1` | The FIM evidence session (below): runs `vm_test_fim.ps1` unchanged and gives `record_session.ps1` the `-Cleanup` switch it expects. Never part of a batch |
 | `tools/demo_t1486.ps1` | A slow version of that test for the live documents-zone demo, never used for recording. It pauses 100 ms between files (`-PauseMilliseconds`), takes `-FileCount`, keeps the process alive for `-HoldSeconds` so containment can reach it, and with `-NoCleanup` leaves its dummy files in `Documents\ThreatPulseDemo`. `-Cleanup` reports how many files were locked, then removes the folder |
 | `tools/vm_benign_admin.ps1`, `tools/vm_benign_zip.ps1` | Scripted benign activities |
 | `tools/make_batch_plan.py` | Generated `batch_plan.json`, from a recorded seed |
@@ -198,6 +199,13 @@ Each session gets its own folder under `C:\ThreatPulseLab\logs\sessions\`, holdi
 After the sensors start, each session waits 10 seconds to settle and then 60 seconds to warm up (`-WarmupSeconds`), and records `warmup_seconds` and, from batch 3, `warmup_end_utc` in `session.json`. **Track B computes features from `start_utc`, the test start, so what happens during the warm-up, such as the `WmiApSrv.exe` bursts below, is not counted.** The sessions per batch come from `tools/batch_plan.json`, and `run_batch.ps1` prints the count. Only a benign activity that isn't scripted pauses for a person: batch 2 had 9 sessions and no pause. It then has to pass a clean-start check: if FIM reports a change from the baseline by then, the recording stops. If a harmless rewrite such as Edge's Run value trips it, run the batch again from that session with `-FromOrder`. The check only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
 
 `pool` in `session.json` says which group of techniques a session belongs to. It isn't the train/test split, which is made later by session.
+
+**The FIM evidence session.** `vm_test_fim.ps1` already changes the hosts file and a Startup folder, but none of the recorded batches holds such a change (all 24 `fim_change` events in batches 1 to 5 are registry values). `tools/vm_fim_session.ps1` lets `record_session.ps1` record it as one short labelled session. It runs the unchanged test, and its `-Cleanup` is a safety net that removes the test's values, file and hosts line only if they are still there. The session's pool is `fim-test-only`, so it is never used to train or evaluate the model (PLANNING.md Section 8.1). Export it into a folder of its own (for example `fim-test-01`), never into a batch folder. Track B's training loader and rule evaluation skip the pool: both read `excluded_from_ml_pools` from `config/recording_tests.json` and stop if it is missing.
+
+```powershell
+# In the lab VM, host-only, as lab in a 64-bit PowerShell opened as administrator, after the batches are finished:
+.\agent\tools\record_session.ps1 -TestId fim-test -Run 1 -Network host-only
+```
 
 From batch 2, `session.json` has no byte order mark. Batch 1's files have one and no `warmup_seconds`, so read them with `encoding="utf-8-sig"`, which works for both, and treat a missing `warmup_seconds` as 0. `warmup_end_utc` and `cleanup_root_pid` are in the files from batch 3 on, and are missing from batches 1 and 2. `agent_commit` is the repository commit on the VM, not the build of the agent: all 11 batches use the one binary built before `process.microsoft_root` was added, and the VM only pulls script changes until Phase 4.
 
@@ -217,7 +225,7 @@ To label exported data without touching it:
 cd agent && uv run python tools/label_session.py --batch <exported batch folder> --out <new folder>
 ```
 
-`--out` never overwrites a `labels.csv`, and `--batch` needs it. The current label folders are `batch-01-labels-v3` and `batch-02-labels-v2`; the earlier ones (`-v2`, `batch-02-labels`) left the cleanup as `background` and are superseded. The cleanup tree is found by `cleanup_root_pid` when `session.json` has it, and otherwise as the PowerShell that starts after `end_utc` with the same parent as the test's root and `-Cleanup` in its command line. The test part of T1003.001 is only about 2 events. The split depends on the processes the wrapper starts, so check it again if Atomic Red Team or the wrapper is updated.
+`--out` never overwrites a `labels.csv`, and `--batch` needs it. The current label folders are `batch-01-labels-v3` and `batch-02-labels-v2`; the earlier ones (`-v2`, `batch-02-labels`) left the cleanup as `background` and are superseded. The cleanup tree is found by `cleanup_root_pid` when `session.json` has it, and otherwise as the PowerShell that starts after `end_utc` with the same parent as the test's root and `-Cleanup` in its command line. The test part of T1003.001 is 2 events in 4 of the 5 recorded sessions and 56 events of normal PowerShell start-up in the fifth. The split depends on the processes the wrapper starts, so check it again if Atomic Red Team or the wrapper is updated.
 
 **Installers for the `install-uninstall` sessions.** They sit in `C:\ThreatPulseLab\installers` inside the `atomic-ready-3` snapshot, downloaded with NAT on from the publishers' own sites. The hashes are what the VM computed with `Get-FileHash`. They haven't been compared with a publisher's checksum.
 
@@ -455,6 +463,8 @@ Settled in the VM:
 | `process_access` decoding | Works: other events show `vm_read`, for example with target `StoreDesktopExtension.exe` |
 
 Windows blocked the dump, but the agent recorded no sign of the attempt in `process_access`. A single test can't show why, and the project Sysmon config in PLANNING.md Section 9 is untested. Nothing was disabled to get this result.
+
+**The same result in the dataset.** Of the 5 recorded T1003.001 #2 sessions (one per batch from batch 1 to batch 5), 4 have a test part of 2 events, PowerShell's start and stop. The fifth, in batch 5, has 56: the PowerShell process ran for about 12 seconds and the events are its normal start-up (a `conhost` child, file writes and registry writes), with no `rundll32` event and no dump file. None of the 5 has a `process_access` event on `lsass.exe`. The behaviour rule `R-T1003-002` (the dump command line), replayed over them, fires in 4 of them. In the other (batch 2), the PowerShell command line was not captured (null), so it could not fire. The policy engine gives that alert `alert_only`, because rule P1 matches only `process_access` events. This is a documented limitation, not a model result (PLANNING.md 4.3 and 8.1).
 
 **Batch 1 of the dataset (PHASES.md steps 2.4 and 2.5).** The batch was recorded with `run_batch.ps1`, exported, and checked read-only. Counts only: the logs stay out of the repo.
 

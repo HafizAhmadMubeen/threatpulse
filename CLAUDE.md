@@ -29,7 +29,7 @@ Static tools are bypassed by packing, obfuscation and dynamic API resolution, an
 | Gen | Technique | Component |
 |---|---|---|
 | 1st | Signatures | SHA-256 hash list + YARA |
-| 2nd | Heuristics + integrity | `pefile` heuristics, EMBER-trained static model, File Integrity Monitoring |
+| 2nd | Heuristics + integrity | `pefile` heuristics and File Integrity Monitoring. The EMBER-trained static model is future work |
 | 3rd | Behaviour | ETW/Sysmon telemetry + Sigma-style ATT&CK-mapped rules |
 | 4th | AI/ML | XGBoost behavioural triage + LLM/RAG reports |
 | 4th | Access control | ABAC policy engine guarding protected zones |
@@ -62,7 +62,7 @@ agent (C++)  -> events.jsonl -> detection layers (B) -> Alert
 |---|---|---|
 | Document folders | Ransomware | Controlled Folder Access + own detector (write rate + entropy) → suspend |
 | Run/RunOnce keys, startup folders, hosts file | Persistence | FIM detects → restore every unapproved change → suspend origin only if risk score is high and it's still running |
-| LSASS memory | Credential dumping | Sysmon Event ID 10 with memory-read access, not in allowlist → suspend (alert-only while in learning mode) |
+| LSASS memory | Credential dumping | Sysmon Event ID 10 with memory-read access, not in allowlist → suspend (alert-only while in learning mode). With LSA protection on no access is recorded: see Accepted limitations |
 | Network | Exfiltration / C2 | Per-program Windows Firewall block rule |
 
 Policy rules live in `rules/policy.yaml` (subject / object / environment attributes, NIST SP 800-162 terms). The full rule set is in PLANNING.md Section 5.6. Every decision records which rules fired and which attributes caused them. A decision can hold several actions, each with its own status. The never-suspend list matches by **full path + Microsoft signature**, never by name alone.
@@ -133,15 +133,17 @@ The full list is in PLANNING.md Section 10.
 | Persistence zone | Restore unapproved changes. Suspend only by risk score |
 | Containment | Limited containment is in scope |
 | Phase order | PHASES.md is authoritative for steps. PLANNING.md for design, contracts and gates |
-| Scope | Full scope as designed: C++ ETW agent, EMBER static model, all layers and zones |
+| Scope | The design covers the C++ ETW agent, all layers and all zones. The current release is the subset in PLANNING.md Section 2.1. Future work: batch 9 (T1685) and further batches, the FIM evidence session, the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub), backend API authentication, a full live end-to-end integration and an LSASS demonstration. For how to continue, see docs/handover.md |
 | Lab | One lab VM (Track A). B and C develop in WSL only |
-| LLM | Free-tier cloud API through a **provider-agnostic client** (switching provider is one setting); local Ollama as fallback. Keys only in `.env` (gitignored), never in code, logs or commits |
+| LLM | Gemini free tier through a **provider-agnostic client** (switching provider is one setting, `LLM_PROVIDER`). Local Ollama is the fallback and Groq an alternative. Keys (`GEMINI_API_KEY`, `GROQ_API_KEY`) only in `.env` (gitignored, template `.env.example`), never in code, logs or commits. Only triaged alerts from the lab VM are ever sent |
 
-**Still open:** which free-tier provider, ChromaDB vs FAISS (ChromaDB recommended). Don't decide these in code; ask.
+**Still open:** ChromaDB vs FAISS (ChromaDB recommended). Don't decide this in code; ask.
 
 ## Accepted limitations
 
 - User-mode only: detect-then-contain, not prevention (e.g. LSASS access is reported after the handle opens).
+- LSASS under LSA protection: Windows denies the dump and the sensors see little of the attempt (of the 5 recorded T1003.001 sessions, 4 have a 2-event test part and one has 56 events of normal PowerShell start-up, and none has a `process_access` on `lsass.exe`). Sysmon Event ID 10 only helps where the access is visible. The command-line rule `R-T1003-002` is the layer that still fires, where the command line is captured (4 of the 5 sessions), and the policy engine only alerts on it. The evaluation reports T1003.001 as a documented limitation, not as a model success or failure (PLANNING.md 4.3 and 8.1).
+- On the LLM free tier the provider may use prompts to improve its products, so only triaged alerts from the lab VM are ever sent, never raw event streams or personal data.
 - Persistence protection is detect-and-revert.
 - Windows only, single endpoint, prototype for controlled lab environments, not production EDR.
 

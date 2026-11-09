@@ -217,8 +217,12 @@ def test_committed_plan_matches_its_seed():
 def test_plan_covers_every_session_once():
     sessions = plan_sessions()
     assert len(sessions) == 55
+    excluded = config().get("excluded_from_ml_pools", [])  # recorded outside the plan, as one session
     for test in config()["tests"]:
         runs = [session["run"] for session in sessions if session["test_id"] == test["id"]]
+        if test["pool"] in excluded:
+            assert runs == []
+            continue
         assert sorted(runs) == list(range(1, test["runs"] + test.get("extra_runs", 0) + 1))
     benign = sorted(session["run"] for session in sessions if session["test_id"] == "benign")
     assert benign == list(range(1, 16))

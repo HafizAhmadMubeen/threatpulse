@@ -9,8 +9,10 @@
     { "id": "T1486-script", "technique": "T1486", "kind": "script", "script": "vm_t1486_script.ps1", "pool": "training-technique", "runs": 5, "network": "host-only" },
     { "id": "T1053.005-2", "technique": "T1053.005", "kind": "atomic", "number": 2, "pool": "held-out", "runs": 3, "network": "host-only" },
     { "id": "T1685-51", "technique": "T1685", "kind": "atomic", "number": 51, "pool": "held-out", "runs": 3, "network": "host-only" },
-    { "id": "T1218.011-9", "technique": "T1218.011", "kind": "atomic", "number": 9, "pool": "held-out", "runs": 3, "network": "host-only" }
+    { "id": "T1218.011-9", "technique": "T1218.011", "kind": "atomic", "number": 9, "pool": "held-out", "runs": 3, "network": "host-only" },
+    { "id": "fim-test", "technique": null, "kind": "script", "script": "vm_fim_session.ps1", "pool": "fim-test-only", "runs": 1, "network": "host-only" }
   ],
+  "excluded_from_ml_pools": ["fim-test-only"],
   "benign": {
     "sessions": 15,
     "nat_sessions": 5,
