@@ -10,7 +10,11 @@
       "action": "kill",
       "automatic": true,
       "status": "executed",
-      "executed_at": "2026-11-05T09:35:01.150Z"
+      "executed_at": "2026-11-05T09:35:01.150Z",
+      "target": {
+        "pid": 6120,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
     }
   ],
   "attributes": {

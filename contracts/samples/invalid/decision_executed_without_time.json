@@ -10,7 +10,11 @@
       "action": "suspend",
       "automatic": true,
       "status": "executed",
-      "executed_at": null
+      "executed_at": null,
+      "target": {
+        "pid": 6120,
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
     }
   ],
   "attributes": {

@@ -12,6 +12,7 @@ export type ActionName =
   | 'request_delete'
 export type RequestAction = Extract<ActionName, 'request_kill' | 'request_delete'>
 export type ActionStatus =
+  | 'pending'
   | 'executed'
   | 'failed'
   | 'skipped'

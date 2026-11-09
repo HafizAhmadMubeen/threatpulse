@@ -175,3 +175,46 @@ From `track-b/rules`, after replaying batch 1 through the rules and features. Sa
 1. **For Track A, labels:** in the T1486 session, the cleanup PowerShell that deletes the test folder afterwards (same 25 documents) is labelled `part=background`, `label=benign`. It behaves exactly like the attack, so it would teach the model that ransomware behaviour is benign. It should be `harness`, as in the other sessions. This replaces item 4 of the previous section.
 2. **PHASES.md step 2.5 or 3.4:** batch 1 gives 7 malicious process trees and 393 benign ones. State the class balance in the evaluation report, and that most benign trees are single processes with no start event.
 3. **PLANNING.md Section 8.3 (ML quality):** report results per process tree, and say that the T1003.001 attack tree has 2 events because LSA protection blocked the dump, so it is expected to be hard to tell apart.
+
+# Added on `track-a/policy-engine` (PHASES step 3.1)
+
+Approved by the repository lead for this task. Apply after `track-a/atomic` merges, since it edits the same sections.
+
+## PLANNING.md
+1. **Section 5.1 (Event):** add optional `process.microsoft_root`: true only when the signature verified and the chain ends at a Microsoft root, checked by the agent and never taken from the signer text. Absent means unknown, not false.
+2. **Section 5.2 (Alert):** add optional `subject.microsoft_root`, copied from the Event by detection.
+3. **Section 5.3 (Decision):**
+   - add the status `pending` for planned automatic actions (`executed_at` null). `policy.decide` plans and `policy.execute` runs. Automatic actions use `pending`, `executed`, `failed` and `skipped`.
+   - add the optional action `target: {pid, image}`, set for `suspend`, `block_network` and `request_kill`.
+   - the example should show `pending`.
+4. **Section 5.5 (API):** `GET /stats` `actions_by_status` gains `pending`.
+5. **Section 5.6 (`rules/policy.yaml`):** replace the example with the shipped file. Differences:
+   - `risk_score_gte` takes a threshold name (`auto_contain`, `request_kill`).
+   - new top-level `fim_debounce_seconds: 2`.
+   - `never_suspend` entries are `{path, signature}` (default `microsoft`), with `{system: true}` and a `*` for one whole folder name. Our own programs are listed by exact path with `signature: none`, not the `C:\ThreatPulseLab\` tree.
+   - `thresholds.alert` is a dashboard threshold only. No rule reads it.
+   - new Defender and Sysmon entries.
+   - A never-suspend path with an unknown `microsoft_root` counts as protected. Only an explicit `false` means not exempt. Never-suspend also covers `block_network` and `request_kill`.
+6. **Section 5.6 text, P2:** the engine restores only when the item differs from the baseline and has been different for at least `fim_debounce_seconds`. The caller supplies that fact.
+7. **Section 5.6 text, P2b:** a FIM alert has no process and a null score, so `risk_score_gte` tests the best score in the `writer_tree` the caller passes. Null scores never match.
+8. **Section 7 (weaknesses), new row:** administrators can replace the exact files of our own never-suspend entries (agent and FIM Python). Accepted.
+
+## PHASES.md
+9. **Step 3.1:** note it is done on `track-a/policy-engine` for `decide` only: rules P1 to P6, the contract changes above, the tests (rules, null score, `static_analysis`, imports, never-suspend, debounce, schema validity). Still open in 3.1: the approved-change list and the LSASS allowlist built from benign data. `execute` is the next step.
+
+## ROADMAP.md
+10. **Section 2, `decide` signature:** `decide(alert, context=None, policy=None) -> Decision`. `context` keys: `now`, `suspended_pids`, `fim`, `writer_tree`.
+11. **Section 2:** the orchestrator must supply `fim` after the debounce and a `writer_tree` for FIM alerts. The link from a FIM change to the tree that wrote it is not built yet. `triage/features.py:link_fim` has the same idea.
+
+## CLAUDE.md
+12. **Protected zones table, persistence row:** "restore every unapproved change" should say "that still differs from the baseline after about 2 seconds".
+
+## For Track A (agent and FIM)
+1. **Write `process.microsoft_root` in `agent/src/jsonl_writer.cpp`** from `ImageInfo::microsoft_root` (one line, next to `signed` and `signer`). Without it, every recording has the unknown state, and the never-suspend list protects a listed path regardless of signature.
+2. **Confirm the two own-program paths in `rules/policy.yaml` on the VM:** `...\agent\build\Release\threatpulse_agent.exe` and `...\agent\.venv\Scripts\python.exe`. A venv `python.exe` may start the base interpreter as a child, whose path would then need an entry.
+3. **Check that `chains_to_microsoft_root` is true on this VM for** `svchost.exe`, `lsass.exe`, `MsMpEng.exe` and `Sysmon64.exe`. Catalog-signed files are the risk: `agent/README.md` already asks this question.
+4. **`policy.execute` must re-verify the signature just before a suspend,** and keep the VM guard and undo. It is not part of this step.
+5. **Approved-change handling for Edge:** the engine restores only changes that still differ from the baseline after the debounce, so Edge's autolaunch value needs no approved-change entry if it is back at the baseline in 2 seconds. The caller must compare with the baseline *after* the wait.
+
+## For the frontend
+13. The dashboard now has a `pending` action status (badge and stats count). Nothing else changed.

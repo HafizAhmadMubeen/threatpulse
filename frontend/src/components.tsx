@@ -61,6 +61,7 @@ export function RiskScore({ alert }: { alert: RiskFields }) {
 }
 
 const STATUS_LABELS: Record<ActionStatus, string> = {
+  pending: 'pending',
   executed: 'executed',
   failed: 'failed',
   skipped: 'skipped',
@@ -69,8 +70,8 @@ const STATUS_LABELS: Record<ActionStatus, string> = {
   rejected: 'rejected',
 }
 
-export function StatusBadge({ status }: { status: ActionStatus | 'pending' }) {
-  const label = status === 'pending' ? 'pending' : STATUS_LABELS[status]
+export function StatusBadge({ status }: { status: ActionStatus }) {
+  const label = STATUS_LABELS[status]
   return <span className={`badge badge-${status}`}>{label}</span>
 }
 

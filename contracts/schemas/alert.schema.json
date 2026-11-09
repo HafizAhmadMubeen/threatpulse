@@ -96,6 +96,10 @@
         "signed": { "type": "boolean" },
         "signer": { "type": ["string", "null"] },
         "trusted_path": { "type": "boolean" },
+        "microsoft_root": {
+          "description": "True only when the agent verified the signature and the chain ends at a Microsoft root. Copied from the Event. Absent means unknown, which is not the same as false. The signer text is never used for this.",
+          "type": "boolean"
+        },
         "ancestors": {
           "description": "Nearest parent first.",
           "type": "array",

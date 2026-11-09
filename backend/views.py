@@ -8,7 +8,7 @@ from backend.store import ReviewStore
 
 LAYERS = ("signature", "heuristic", "fim", "rule", "ml")
 ZONES = ("documents", "persistence", "lsass", "network", "none")
-STATUSES = ("executed", "failed", "skipped", "awaiting_approval", "approved", "rejected")
+STATUSES = ("pending", "executed", "failed", "skipped", "awaiting_approval", "approved", "rejected")
 
 
 def with_reviews(decision: dict, store: ReviewStore) -> dict:

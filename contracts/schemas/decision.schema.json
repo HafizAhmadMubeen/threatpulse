@@ -68,6 +68,7 @@
         "automatic": { "type": "boolean" },
         "status": {
           "enum": [
+            "pending",
             "executed",
             "failed",
             "skipped",
@@ -75,6 +76,16 @@
             "approved",
             "rejected"
           ]
+        },
+        "target": {
+          "description": "The process this action is aimed at, when it acts on one (suspend, block_network, request_kill). The engine checks the never-suspend list against it, and the executor acts on it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pid", "image"],
+          "properties": {
+            "pid": { "type": "integer", "minimum": 1 },
+            "image": { "type": "string", "minLength": 1 }
+          }
         },
         "reason": {
           "description": "Required when the status is skipped or failed.",
@@ -112,7 +123,7 @@
           "else": {
             "properties": {
               "automatic": { "const": true },
-              "status": { "enum": ["executed", "failed", "skipped"] }
+              "status": { "enum": ["pending", "executed", "failed", "skipped"] }
             }
           }
         },
@@ -136,7 +147,7 @@
           "if": {
             "required": ["status"],
             "properties": {
-              "status": { "enum": ["skipped", "awaiting_approval", "approved", "rejected"] }
+              "status": { "enum": ["pending", "skipped", "awaiting_approval", "approved", "rejected"] }
             }
           },
           "then": {

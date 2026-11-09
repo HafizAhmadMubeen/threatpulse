@@ -65,7 +65,11 @@
           "description": "True only for a verified signature. A failed check is false.",
           "type": "boolean"
         },
-        "signer": { "type": ["string", "null"] }
+        "signer": { "type": ["string", "null"] },
+        "microsoft_root": {
+          "description": "True only when the signature verified and the certificate chain ends at a Microsoft root. Checked by the agent, never taken from the signer text. Optional: recordings made before it existed lack it, and absent means unknown, not false.",
+          "type": "boolean"
+        }
       }
     },
     "target": {
