@@ -1211,6 +1211,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "jsonschema" },
     { name = "pefile" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
     { name = "yara-python" },
 ]
@@ -1227,6 +1228,7 @@ requires-dist = [
     { name = "fastapi", specifier = "==0.162.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pefile", specifier = "==2024.8.26" },
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "uvicorn", specifier = "==0.54.0" },
     { name = "yara-python", specifier = "==4.5.4" },
 ]

@@ -1,0 +1,39 @@
+# T1547.001 Registry Run Keys / Startup Folder (persistence zone).
+# Matches on where something is written, so any program that writes an autorun entry
+# is caught, not only the Atomic test. The FIM rules for the same zone are in FIM.yaml.
+- id: R-T1547-001
+  title: Autorun registry value set
+  description: >
+    A process wrote a value under a Run, RunOnce or Winlogon key. ETW and Sysmon both
+    report registry writes, so one action can arrive twice. The alert is raised once per
+    process and key.
+  layer: rule
+  zone: persistence
+  techniques: [T1547.001]
+  dedupe_by: [pid, target.registry_key]
+  detection:
+    selection:
+      event_type: registry_set
+      target.registry_key|contains:
+        - '\CurrentVersion\Run\'
+        - '\CurrentVersion\RunOnce\'
+        - '\CurrentVersion\RunOnceEx\'
+        - '\CurrentVersion\RunServices\'
+        - '\CurrentVersion\RunServicesOnce\'
+        - '\Policies\Explorer\Run\'
+        - '\Winlogon\Shell'
+        - '\Winlogon\Userinit'
+    condition: selection
+
+- id: R-T1547-002
+  title: File created in a Startup folder
+  description: A process created a file in a Startup folder, so it runs at the next logon.
+  layer: rule
+  zone: persistence
+  techniques: [T1547.001]
+  dedupe_by: [pid, target.path]
+  detection:
+    selection:
+      event_type: file_create
+      target.path|contains: '\Start Menu\Programs\Startup\'
+    condition: selection

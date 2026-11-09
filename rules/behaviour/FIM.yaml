@@ -1,0 +1,38 @@
+# File Integrity Monitoring changes (2nd generation integrity checking).
+# fim_change events say what changed, never who changed it, so these alerts have no
+# process. The orchestrator links one when it can (PHASES.md 3.9).
+- id: R-FIM-PERSISTENCE
+  title: Autorun entry changed
+  description: FIM found a Run key value or a Startup folder file that differs from the baseline.
+  layer: fim
+  zone: persistence
+  techniques: [T1547.001]
+  dedupe_by: []
+  detection:
+    selection:
+      - event_type: fim_change
+        target.registry_key|contains:
+          - '\CurrentVersion\Run\'
+          - '\CurrentVersion\RunOnce\'
+          - '\CurrentVersion\RunOnceEx\'
+          - '\CurrentVersion\RunServices\'
+          - '\CurrentVersion\RunServicesOnce\'
+          - '\Policies\Explorer\Run\'
+          - '\Winlogon\Shell'
+          - '\Winlogon\Userinit'
+      - event_type: fim_change
+        target.path|contains: '\Start Menu\Programs\Startup\'
+    condition: selection
+
+- id: R-FIM-HOSTS
+  title: Hosts file changed
+  description: FIM found that the hosts file differs from the baseline.
+  layer: fim
+  zone: persistence
+  techniques: []
+  dedupe_by: []
+  detection:
+    selection:
+      event_type: fim_change
+      target.path|endswith: '\drivers\etc\hosts'
+    condition: selection

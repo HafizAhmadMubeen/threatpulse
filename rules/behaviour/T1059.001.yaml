@@ -1,0 +1,24 @@
+# T1059.001 Command and Scripting Interpreter: PowerShell.
+# PowerShell is normal, so this looks for the ways attackers hide what it runs.
+- id: R-T1059-001
+  title: PowerShell started to hide or encode what it runs
+  description: >
+    PowerShell started with an encoded command, a hidden window, or code that downloads or
+    decodes and runs. Needs the command line, which is null for processes that exited
+    before it could be read.
+  layer: rule
+  zone: none
+  techniques: [T1059.001]
+  dedupe_by: [pid]
+  detection:
+    selection:
+      - event_type: process_start
+        process.image|endswith: ['\powershell.exe', '\pwsh.exe']
+        process.cmdline|contains: [' -enc', ' -ec ', ' -e ']
+      - event_type: process_start
+        process.image|endswith: ['\powershell.exe', '\pwsh.exe']
+        process.cmdline|contains: [' -windowstyle hidden', ' -w hidden']
+      - event_type: process_start
+        process.image|endswith: ['\powershell.exe', '\pwsh.exe']
+        process.cmdline|contains: ['downloadstring(', 'frombase64string(', 'invoke-expression', ' iex ', 'iex(']
+    condition: selection
