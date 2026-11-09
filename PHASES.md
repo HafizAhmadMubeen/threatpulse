@@ -43,26 +43,30 @@ This applies to every developer workstation (Windows 11 with WSL2 Ubuntu). Only 
 
 ## Release scope
 
-The steps below are the full plan. The current release is the subset in [PLANNING.md Section 2.1](PLANNING.md#21-release-scope). A step marked **Future work** is designed but not part of the release, and a step marked **Release:** is in the release in the form the marker states.
+The steps below are the full plan. The current release is the subset in [PLANNING.md Section 2.1](PLANNING.md#21-release-scope), which also says what is implemented and how each part was verified. A step marked **Future work** is designed but not part of the release, and a step marked **Release:** is in the release in the form the marker states.
 
 | Steps | In the release |
 |---|---|
 | 0.0 to 0.11 | Yes |
-| 1.1 to 1.10 | Yes, including the EICAR and UPX check in the VM (`detection/VM_TEST_PLAN.md`) |
-| 2.1 to 2.3 | Yes |
-| 2.4 to 2.6 | Partly: batches 1 to 6 and batch 9 (47 of the 55 sessions). Batch 6 is the NAT batch. Batches 7, 8, 10 and 11 are not recorded |
+| 1.1 to 1.4 | Yes, verified in the VM |
+| 1.5 to 1.10 | Yes, unit-tested. The EICAR and UPX check in the VM (`detection/VM_TEST_PLAN.md`) is still to run |
+| 2.1 to 2.3 | Yes, verified in the VM |
+| 2.4 to 2.6 | Partly: batches 1 to 6, 46 of the 55 sessions. Batch 6 is the NAT batch. Batches 7 to 11 are not recorded, so T1685 has no run |
 | 2.7, 2.8, 2.10 to 2.12 | Yes |
 | 2.9 | Future work: the EMBER static model. Generation 2 rests on `pefile` heuristics and FIM |
-| 3.1, 3.2 | Yes, with the enforcement test in the VM |
+| 3.1, 3.2 | Yes, unit-tested. The enforcement test in the VM (`agent/tools/vm_test_enforcement.ps1`) is written and still to run |
 | 3.3 | Future work: the LSASS allowlist and enforcing mode |
-| 3.4 to 3.9 | Yes. 3.4 and 3.5 use leave-one-batch-out, and 3.6 includes the entropy check |
+| 3.4 to 3.6 | Yes. 3.4 and 3.5 use leave-one-batch-out and cover two held-out techniques. 3.6 includes the entropy check in the VM, still to run |
+| 3.7 | Future work: the LLM report writer. `write_report` is a stub |
+| 3.8, 3.9 | Yes |
 | 4.1, 4.4, 4.8 | Future work: the `integration-ready` snapshot, the live benign run, tuning on live data |
-| 4.2, 4.3, 4.7, 4.9 | Yes |
-| 4.5, 4.6 | Partly: documents and persistence zone demos, and approve and reject on replayed sessions |
+| 4.2, 4.3, 4.7, 4.9 | Yes. 4.7 applies to the enforcement half of the injection test |
+| 4.5 | Partly: documents and persistence zone demos |
+| 4.6 | Future work: connecting an approval to an action, with backend API authentication |
 | 5.1, 5.5 | Partly, as marked |
 | 5.2 to 5.4, 5.6, 5.7 | Yes |
 
-Also future work: backend API authentication, a full live end-to-end integration and a demonstration of the LSASS zone.
+Also future work: batch 9 (T1685) and further batches, the FIM evidence session (ready on the branch `track-a/fim-session`), the T1105 diagnostic, backend API authentication, a full live end-to-end integration and a demonstration of the LSASS zone.
 
 ---
 
@@ -121,7 +125,7 @@ Full instructions for steps 0.1–0.5 and 0.7–0.8: [docs/lab-setup.md](docs/la
 | 2.1 | A | Add network events, and read Sysmon Event IDs 3, 10, 12 and 13 through the Windows Event Log API (`EvtSubscribe`). Decode the access mask into rights like `vm_read`. Event IDs 12 and 13 give full registry paths where ETW can't name a key | A `process_access` event shows decoded rights such as `vm_read`. LSASS itself is an accepted limitation with LSA protection on (PLANNING.md 4.3). A Run key write shows as a `registry_set` event with `source: sysmon` and the full key |
 | 2.2 | A | FIM module (Python, `agent/fim/`): baseline of Run/RunOnce/RunOnceEx keys (RunOnceEx as a subtree, watched through its parent until it exists), startup folders and the hosts file, created before the `atomic-ready-3` snapshot. Event-driven: `RegNotifyChangeKeyValue` for the registry keys and `ReadDirectoryChangesW` for the startup folders and the hosts file's folder, plus a full baseline comparison every 60 seconds as a backup. Changes emit `fim_change` events to `fim.jsonl` | Editing the hosts file produces a `fim_change` event |
 | 2.3 | A | Install Atomic Red Team in the VM (`Invoke-AtomicRedTeam`), pinned as in "Step 2.3 order of work" below. Take snapshot **`atomic-ready-3`**. Then run Atomic T1003.001 and record the LSASS result | `Invoke-AtomicTest T1547.001 -ShowDetails` works. The T1003.001 result is recorded in PLANNING.md 4.3 |
-| 2.4 | A | **Release: batches 1 to 6 and batch 9 (the first T1685 batch) only, 47 sessions (PLANNING.md 2.1).** Recording script (`record_session.ps1`): start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script (`label_session.py`): events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo. `run_batch.ps1 -Batch N` runs one batch from `batch_plan.json`. Run 5 times per training test and 3 times per held-out test, plus one extra T1547.001 #2 run (PLANNING.md Section 10). Each session waits 60 seconds after the sensors start. `label_session.py` also writes a `part` column (`test`, `harness` or `background`); the wrapper and the cleanup process tree are `harness`. `session.json` also records `warmup_end_utc` and `cleanup_root_pid` | One labelled log file per test |
+| 2.4 | A | **Release: batches 1 to 6 only, 46 sessions (PLANNING.md 2.1). T1685 is not recorded.** Recording script (`record_session.ps1`): start agent → launch one test (Atomic or our T1486 script) and record its PID and start/end time → stop. Labelling script (`label_session.py`): events from that process tree = malicious. A single script start_lab_sensors.ps1 starts the agent and FIM together (and stops both), used for every recording and demo. `run_batch.ps1 -Batch N` runs one batch from `batch_plan.json`. Run 5 times per training test and 3 times per held-out test, plus one extra T1547.001 #2 run (PLANNING.md Section 10). Each session waits 60 seconds after the sensors start. `label_session.py` also writes a `part` column (`test`, `harness` or `background`); the wrapper and the cleanup process tree are `harness`. `session.json` also records `warmup_end_utc` and `cleanup_root_pid` | One labelled log file per test |
 | 2.5 | A | **Release: 12 of the 15 benign sessions, 2 of them on NAT (batch 6).** Record 15 benign sessions of about 10 minutes, including "noisy" normal activity: normal use, install/uninstall software, Windows Update, admin PowerShell, zipping files. Record about 5 of them with NAT on, so network mode doesn't correlate with the label (spurious correlation, Arp et al. 2022) | 15 benign sessions recorded, with network mode in each `session.json` |
 | 2.6 | A | After **each** batch: export procedure (stop everything → enable `vm-export` → copy only `.jsonl`/`.csv`, `session.json` and the summary `.txt` files → disable → roll back to `atomic-ready-3`) | Logs present on the host. VM back to snapshot |
 | 2.7 | B | Behaviour rules in Sigma-style YAML for each test technique, plus `match_rules`. The T1547.001 rule must cover `Run`, `RunOnce` and `RunOnceEx` | Each rule fires on its sample event |
@@ -170,12 +174,12 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 | Step | Owner | What to do | Check |
 |---|---|---|---|
 | 3.1 | A | Policy engine `decide` reading `rules/policy.yaml` (PLANNING.md 5.6): multiple actions per decision, never-suspend (path + signature), LSASS learning/enforcing mode, approved-change list. Pure Python, developed in WSL, with a unit test for every rule | All policy tests pass |
-| 3.2 | A | Enforcement in the VM (`policy/actions_windows.py`), each action with an **undo** and the **VM guard** check: suspend/resume, add/remove firewall block rule, restore registry/file from baseline, enable Controlled Folder Access | Each action and undo work on a harmless process in the VM. Each refuses to run without the marker file |
+| 3.2 | A | **Release: implemented and unit-tested. The enforcement test in the VM (`agent/tools/vm_test_enforcement.ps1`) is written and still to run.** Enforcement in the VM (`policy/actions_windows.py`), each action with an **undo** and the **VM guard** check: suspend/resume, add/remove firewall block rule, restore registry/file from baseline, enable Controlled Folder Access | Each action and undo work on a harmless process in the VM. Each refuses to run without the marker file |
 | 3.3 | A | **Future work.** It goes with the LSASS demonstration, and the zone stays in learning mode until then (PLANNING.md 4.3). Build the LSASS allowlist from benign recordings, then switch `lsass_mode` to `enforcing` | List committed with evidence for each entry. Benign replay causes no LSASS suspensions. With LSA protection on, the recorded T1003.001 sessions give no LSASS access to learn from (PLANNING.md 4.3) |
 | 3.4 | B | **Release: leave-one-batch-out, so every session from one boot stays on one side.** Train XGBoost on A's dataset. **Split by recording session, not by event**, so the same run never appears in both training and test data | Metrics on the test split |
-| 3.5 | B | **Release: the per-technique table includes the held-out techniques, with T1685 at 1 run.** Test on held-out techniques. Choose the risk threshold. Package `score_process` | Held-out results written in `docs/` |
+| 3.5 | B | **Release: the per-technique table covers two held-out techniques, T1053.005 and T1218.011, because T1685 was not recorded.** Test on held-out techniques. Choose the risk threshold. Package `score_process` | Held-out results written in `docs/` |
 | 3.6 | B | Ransomware detector: file write rate + entropy of written files per process | Our T1486 script scores high. Zipping files is documented either way |
-| 3.7 | C | `write_report`: system prompt with rules, telemetry wrapped in `<telemetry>` tags in the user message, retrieved ATT&CK text added, **no tools given to the model** | Report generated from a sample alert |
+| 3.7 | C | **Future work.** `write_report` is a stub that makes no LLM call. The prompt template and the technique-ID validator (3.8) are implemented. `write_report`: system prompt with rules, telemetry wrapped in `<telemetry>` tags in the user message, retrieved ATT&CK text added, **no tools given to the model** | Report generated from a sample alert |
 | 3.8 | C | Report validator: every technique ID must exist in the STIX data | A deliberately fake ID gets caught |
 | 3.9 | C | Pipeline orchestrator: events → B's functions → alerts → A's `decide` → C's `write_report`, using stubs where needed | Runs end to end on sample files |
 
@@ -194,7 +198,7 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 | 4.3 | All | **Replay mode first:** feed recorded `events.jsonl` files through the pipeline (no live attack) | Alerts and decisions match expectations |
 | 4.4 | All | **Future work.** Live benign run (30–60 minutes of normal use) | False alarms counted and reviewed |
 | 4.5 | A | **Release: documents and persistence, screen-recorded.** The network zone's block action is verified by the enforcement test in step 3.2, and the LSASS demo is future work. Live zone demos: documents, persistence, LSASS, network (PLANNING.md 8.2), with NAT on. The LSASS demo can't show a suspension with LSA protection on (PLANNING.md 4.3 and 9) | The other three work, and the LSASS result matches PLANNING.md 4.3 |
-| 4.6 | C | **Release: approve and reject on the replayed recorded sessions.** Approving an action on a live system is future work, together with backend API authentication. Approve/reject flow for kill requests (P5), delete requests (P6) and FIM change approval | Approval triggers the action. Rejection doesn't |
+| 4.6 | C | **Future work.** The API records an analyst's approval or rejection and nothing acts on it. Connecting an approval to an action needs backend API authentication first. Approve/reject flow for kill requests (P5), delete requests (P6) and FIM change approval | Approval triggers the action. Rejection doesn't |
 | 4.7 | C | Prompt-injection demo: a file named like an instruction | Same decision as without the injected text |
 | 4.8 | B | **Future work.** Tune thresholds on live data and fix false positives | Updated threshold documented |
 | 4.9 | All | Freeze features, tag `v0.9` | Tag pushed |
@@ -213,7 +217,7 @@ Everything here happens inside the VM, and a person runs every Atomic test. Use 
 | 5.2 | A | Limitations section: detect-then-contain, user-mode limits, Defender dependency | Written |
 | 5.3 | All | Bring all design docs in line with what was built (scope, dataset, containment) | Docs match the code |
 | 5.4 | All | Evaluation report and architecture diagram in `docs/` | Draft reviewed by all three |
-| 5.5 | C | **Release: documents and persistence demos, the dashboard replay and the prompt-injection test.** Record the demo video | Covers all four zones and the injection test |
+| 5.5 | C | **Release: documents and persistence demos, the dashboard replay and the enforcement half of the prompt-injection test.** Record the demo video | Covers all four zones and the injection test |
 | 5.6 | All | Internal design review: each member walks through *every* layer, not only their own | Each member can answer questions on all tracks |
 | 5.7 | All | Release tag `v1.0` | Tag pushed |
 

@@ -2,7 +2,7 @@
 
 **Behaviour-based, AI-assisted endpoint threat detection for Windows: a 4th-generation malware scanner.**
 
-> **Status:** Active development. The current release covers all four scanner generations, a dataset of 47 recorded sessions, LLM reports with a technique-ID validator, and a dashboard demo from replayed sessions: see [Current release](#current-release). See [PLANNING.md](PLANNING.md) for the full plan, [PHASES.md](PHASES.md) for step-by-step phases, and [ROADMAP.md](ROADMAP.md) for who builds what.
+> **Status:** Active development. The current release covers all four scanner generations, a dataset of 46 recorded sessions, a technique-ID validator and prompt template, and a dashboard demo from replayed sessions: see [Current release](#current-release). See [PLANNING.md](PLANNING.md) for the full plan, [PHASES.md](PHASES.md) for step-by-step phases, and [ROADMAP.md](ROADMAP.md) for who builds what.
 
 ---
 
@@ -65,18 +65,21 @@ flowchart LR
 
 ## Current release
 
-The sections above describe the full design. The current release covers:
+The sections above describe the full design. The current release is the part of it that is built:
 
 - **All four scanner generations.** Generation 2 rests on `pefile` heuristics and File Integrity Monitoring.
-- **A recorded dataset** of 47 sessions from our own lab VM: batches 1 to 6 and one T1685 batch, with batch 6 as the NAT batch.
-- **Verification in the VM:** the EICAR and UPX check, the ransomware entropy check, a test of every enforcement action and its undo, and live zone demos for ransomware and persistence.
-- **LLM reports** with the technique-ID validator, and the prompt-injection demo.
-- **A dashboard demo** from replayed recorded sessions, with approve and reject, plus screen-recorded live zone demos in the VM.
-- **An evaluation** with leave-one-batch-out, a per-technique table, the false-positive rate, rule-layer results, latency, and limitations with counts.
+- **A recorded dataset** of 46 sessions from our own lab VM: batches 1 to 6, with batch 6 as the NAT batch.
+- **Implemented and verified in the VM:** the agent, File Integrity Monitoring, and the recorder and labeller.
+- **Implemented and verified on the recordings:** the behaviour rules and the XGBoost triage model (preliminary), evaluated leave-one-batch-out.
+- **Implemented and unit-tested:** the signature and heuristic layers, the entropy detector, the policy engine, the enforcement actions with their undo, the ATT&CK retrieval, technique-ID validator and prompt template, the replay pipeline, the API and the dashboard. Their checks in the VM are still to run: EICAR and UPX, entropy, the enforcement test, and live zone demos for ransomware and persistence.
+- **A dashboard demo** from replayed recorded sessions.
+- **An evaluation** with leave-one-batch-out, a per-technique table, the false-positive rate, rule-layer results, latency and limitations with counts. The held-out evaluation covers two techniques, because T1685 was not recorded.
 
-**Future work:** the EMBER static model, a full live end-to-end integration, backend API authentication, further recording batches, and a demonstration of the LSASS zone. The last is a documented limitation: with LSA protection on, the sensors record no access to LSASS ([PLANNING.md](PLANNING.md) Section 4.3).
+**Documented limitations:** T1003.001 and T1105. In both, the recorded test parts hold no technique behaviour. With LSA protection on, the sensors record no access to LSASS ([PLANNING.md](PLANNING.md) Section 4.3), and in both T1105 sessions no process, file or connection follows the `cmd.exe` that starts the download.
 
-The full list, with session counts, is in [PLANNING.md](PLANNING.md#21-release-scope) Section 2.1.
+**Future work:** batch 9 (T1685) and further recording batches, the FIM evidence session (ready on a branch), the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub, and the provider is decided), backend API authentication, a full live end-to-end integration, and a demonstration of the LSASS zone.
+
+The full list, with session counts, is in [PLANNING.md](PLANNING.md#21-release-scope) Section 2.1. To continue the project, see [docs/handover.md](docs/handover.md).
 
 ## Design principles
 
