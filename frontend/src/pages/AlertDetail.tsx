@@ -188,14 +188,18 @@ function ReportView({ report }: { report: Report | null }) {
           )}
           <p className="report-text">{report.summary}</p>
           <h3>Techniques</h3>
-          <ul>
-            {report.techniques.map((technique) => (
-              <li key={technique.id}>
-                <strong>{technique.id} {technique.name}.</strong>{' '}
-                <span className="report-text">{technique.evidence}</span>
-              </li>
-            ))}
-          </ul>
+          {report.techniques.length === 0 ? (
+            <p className="muted">No ATT&CK technique applies to this alert.</p>
+          ) : (
+            <ul>
+              {report.techniques.map((technique) => (
+                <li key={technique.id}>
+                  <strong>{technique.id} {technique.name}.</strong>{' '}
+                  <span className="report-text">{technique.evidence}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <h3>Timeline</h3>
           <ol>
             {report.timeline.map((line, index) => (

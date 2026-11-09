@@ -232,6 +232,14 @@ n = alert(12.9, "signature", "SIG-EICAR", [], 0.12, "file_create", subject(ps_ma
 decide(n, 13.0, ["P6-delete-request"],
        [act("request_delete", "executed", at=48.2, reviewed_by="lab-analyst", reviewed_at=48.0)])
 ev(ps_main, "file_delete", "etw", 48.31, path=eicar_path)
+report(n, "PowerShell created a file on the Desktop that matches the EICAR antivirus test signature, by both "
+          "its SHA-256 hash and a YARA rule. EICAR is a harmless test file. An analyst approved deleting it, "
+          "and the file was deleted.",
+       [],
+       [f"{clock(12.351)} powershell.exe created eicar.com",
+        f"{clock(12.9)} The file matched the EICAR signature",
+        f"{clock(48.0)} An analyst approved the delete request",
+        f"{clock(48.31)} The file was deleted"])
 
 # 2. UPX-packed harmless program: heuristic layer, default action. After the pipeline has
 # filled in the process: 0.22 is the ML score of the process tree, and 0.95 is the file's.
@@ -303,6 +311,12 @@ e = fim(240.5, "modified", old_hosts, new_hosts, path=HOSTS)
 n = alert(241.0, "fim", "R-FIM-HOSTS", [], None, "fim_change", copy.deepcopy(NO_PROCESS), "persistence", [e],
           path=HOSTS, file_sha256=new_hosts)
 decide(n, 241.1, ["P2-persistence-change"], [act("restore", "executed", at=241.3)], change_approved=False)
+report(n, "The hosts file changed, and the change was not approved, so the file was restored from the baseline. "
+          "FIM reports what changed and not who changed it, and no writer could be linked to this change, so "
+          "the process responsible is unknown and nothing was suspended.",
+       [],
+       [f"{clock(240.5)} FIM reported that the hosts file differs from the baseline",
+        f"{clock(241.3)} The file was restored from the baseline"])
 
 # 6 and 7. Our own T1486 script on dummy files: signed and trusted, so only behaviour gives it away.
 ev(ransom, "process_start", "etw", 300.05)

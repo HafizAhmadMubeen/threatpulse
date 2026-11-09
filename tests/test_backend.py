@@ -110,7 +110,7 @@ def test_stats(client):
     assert body["alerts_by_zone"]["persistence"] == 2
     assert body["pending_approvals"] == 1
     assert body["fim_changes_pending"] == 2
-    assert body["reports_total"] == 6
+    assert body["reports_total"] == 8
     assert 0 < body["events_filtered_before_llm"] < 42
     assert body["skipped_records"] == {"events": 0, "alerts": 0, "decisions": 0, "reports": 0}
 

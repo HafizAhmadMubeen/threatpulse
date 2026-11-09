@@ -291,7 +291,7 @@ def test_not_scored_is_kept_apart_from_a_low_score(data):
         (lambda d: d["decisions"][3]["attributes"].__setitem__("risk_score", 0.1), "risk_score"),
         (lambda d: d["decisions"][3]["attributes"].__setitem__("zone", "none"), "zone"),
         (lambda d: d["decisions"][3]["attributes"].__setitem__("signed", False), "signed"),
-        (lambda d: d["reports"][0]["techniques"][0].__setitem__("id", "T9999"), "T9999"),
+        (lambda d: d["reports"][1]["techniques"][0].__setitem__("id", "T9999"), "T9999"),
         (lambda d: d["alerts"][0].__setitem__("event_type", "process_stop"), "no evidence event"),
         (lambda d: d["alerts"][0]["subject"].__setitem__("pid", 7), "subject pid"),
         (lambda d: d["alerts"][0]["subject"].__setitem__("image", "C:\\other.exe"), "image"),
