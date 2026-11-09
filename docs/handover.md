@@ -87,7 +87,7 @@ The Track B, Track C and policy branches form one stack: each contains its paren
 ### Merge order
 
 1. **`track-a/atomic`.** It is independent of the stack, and the Lane 2 notes say to apply their documentation changes after it merges.
-2. **`track-a/fim-session`.** It **must merge before `track-b/training`.** Track B's training loader and rule evaluation require the key `excluded_from_ml_pools` in `agent/config/recording_tests.json` and stop with an error if it is missing, and that key exists only on this branch. It shares `PLANNING.md` with `track-a/atomic`, so merge `atomic` first.
+2. **`track-a/fim-session`.** It **must merge before `track-b/training`.** Track B's training loader and rule evaluation require the key `excluded_from_ml_pools` in `agent/config/recording_tests.json` and stop with an error if it is missing, and that key exists only on this branch. Merge `track-a/atomic` first. **The merge then conflicts in `PLANNING.md` Section 10, in three adjacent rows.** Resolve it by keeping `atomic`'s "Recording plan" and "Recording batches" rows (46 sessions, batches 1 to 6; the copies on `fim-session` are older) and `fim-session`'s "Dataset fields" row (it names the `fim-test-only` pool). The other `PLANNING.md` changes on both sides merge without conflict. **Two sentences on `fim-session` are out of date after that merge:** the new bullet in `PLANNING.md` Section 8.1 and the paragraph "The FIM evidence session" in `agent/README.md` say that Track B's loaders must still be told to skip the pool, and `track-b/training` already skips it. Reword both.
 3. **The stack, in order:** `track-b/signatures`, `track-c/rag`, `track-b/rules`, `track-a/policy-engine`.
 4. **`track-a/enforcement`**, any time after `policy-engine`. Merging it before the stack is complete would pull the whole stack into one pull request.
 5. **`track-c/orchestrator`, `track-b/entropy`, then `track-b/training`.** Training is last, and it was still receiving commits when this was written.
@@ -95,7 +95,7 @@ The Track B, Track C and policy branches form one stack: each contains its paren
 
 Before merging: `track-b/signatures` and `track-a/policy-engine` change `contracts/`, and such changes need all three members to agree.
 
-At the time of writing, every pair of these branches that shares a file merged without conflict in a trial merge (`PLANNING.md` and `ROADMAP.md` between the Track A branches, `policy/README.md` and `.gitignore` between `enforcement` and the Track B branches). Repeat the trial (`git merge-tree <merge-base> <a> <b>`) before merging if any branch has moved.
+At the time of writing, a trial merge of every pair of these branches that shares a file gave exactly one conflict, the one in step 2 above. The other pairs (`ROADMAP.md` between `atomic` or `fim-session` and `enforcement`, and `policy/README.md` and `.gitignore` between `enforcement` and the Track B branches) merge without conflict. Repeat the trial (`git merge-tree <merge-base> <a> <b>`, and look for conflict markers) before merging if any branch has moved.
 
 ---
 
@@ -251,7 +251,7 @@ Built, unit-tested and ready on the branch `track-a/fim-session`; not run in the
 2. `.\agent\tools\record_session.ps1 -TestId fim-test -Run 1 -Network host-only`
 3. Check the session folder: `validate_events.py` on `events.jsonl` and `fim.jsonl`, then `check_fim_run.py <session>\fim.jsonl C:\ThreatPulseLab\logs\fim_test_keys.txt --events <session>\events.jsonl`.
 4. Export into a folder of its own (for example `vm-export\fim-test-01`), never into a batch folder, and roll back. Label with `label_session.py --batch` into `fim-test-01-labels`.
-5. Merge `track-a/fim-session` before `track-b/training` (section 3).
+5. Merge `track-a/fim-session` before `track-b/training` (section 3, which also lists the conflict to resolve and the two sentences to reword).
 
 ### 8.3 EICAR and UPX check (Gate 1)
 The full text, with the expected output of every step, is `detection/VM_TEST_PLAN.md` on the branch `track-b/signatures`. In outline, inside the VM only:
