@@ -56,7 +56,7 @@ Everything above is the full design, and the design text stays as it is. The cur
 | Ransomware entropy rule `R-T1486-002` | Implemented | Unit-tested, and replayed without reading files. The VM check with `--read-files` has not been run |
 | XGBoost triage and `score_process` | Implemented, preliminary | Verified on recordings: leave-one-batch-out over batches 1 to 6 (results below). Scoring at alert time is worse than in the evaluation, so `--use-model` stays off. Not run live |
 | ABAC policy engine (`decide`) | Implemented | Unit-tested rule by rule, with a test that `policy/` imports nothing from the RAG or LLM code |
-| Enforcement (`execute`, undo, VM guard, never-suspend re-check) | Implemented on the branch `track-a/enforcement` | Unit-tested against a fake Windows API only. `agent/tools/vm_test_enforcement.ps1` is written and has not been run |
+| Enforcement (`execute`, undo, VM guard, never-suspend re-check) | Implemented | Unit-tested against a fake Windows API only. `agent/tools/vm_test_enforcement.ps1` is written and has not been run |
 | ATT&CK retrieval, prompt template and technique-ID validator | Implemented | Unit-tested. The tests that use the downloaded ATT&CK data run after the fetch and index commands |
 | Replay pipeline (detection, policy, report stub) and backend API | Implemented | Run over recordings in WSL. The API records an analyst's approval or rejection, and nothing acts on it |
 | Dashboard (alerts, decisions, FIM changes, stats) | Implemented | Tests in WSL. The pages read replayed sessions |
