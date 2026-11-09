@@ -39,6 +39,10 @@ def ts(seconds: float) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
 
 
+def sample_id(prefix: str, number: int) -> str:
+    return f"{prefix}-{RUN}-{number:06d}"
+
+
 def clock(seconds: float) -> str:
     return (BASE + timedelta(seconds=seconds)).strftime("%H:%M:%S")
 
@@ -158,10 +162,11 @@ alerts, decisions, reports = [], [], []
 
 
 def alert(seconds, layer, rule_id, techniques, risk, event_type, who, zone, evidence,
-          path=None, registry_key=None, access=(), file_sha256=None):
+          path=None, registry_key=None, access=(), file_sha256=None, static=None):
     number = len(alerts) + 1
+    optional = {"static_analysis": static} if static else {}
     alerts.append({
-        "alert_id": f"a-{number:04d}",
+        "alert_id": sample_id("a", number),
         "ts": ts(seconds),
         "layer": layer,
         "rule_id": rule_id,
@@ -172,6 +177,7 @@ def alert(seconds, layer, rule_id, techniques, risk, event_type, who, zone, evid
         "object": {"zone": zone, "path": path, "registry_key": registry_key,
                    "access": list(access), "file_sha256": file_sha256},
         "evidence_event_ids": evidence,
+        **optional,
     })
     return number
 
@@ -190,7 +196,7 @@ def act(action, status, at=None, reason=None, reviewed_by=None, reviewed_at=None
 def decide(number, seconds, rules, actions, **extra):
     source = alerts[number - 1]
     decisions.append({
-        "decision_id": f"d-{number:04d}",
+        "decision_id": sample_id("d", number),
         "alert_id": source["alert_id"],
         "ts": ts(seconds),
         "policy_rules": rules,
@@ -207,7 +213,7 @@ def decide(number, seconds, rules, actions, **extra):
 
 def report(number, summary, techniques, timeline):
     reports.append({
-        "report_id": f"r-{number:04d}",
+        "report_id": sample_id("r", number),
         "alert_id": alerts[number - 1]["alert_id"],
         "summary": summary,
         "techniques": [{"id": i, "name": n, "evidence": e} for i, n, e in techniques],
@@ -221,17 +227,26 @@ ev(ps_main, "process_start", "etw", 5.104)
 eicar_path = "C:\\Users\\lab\\Desktop\\eicar.com"
 e = ev(ps_main, "file_create", "etw", 12.351, path=eicar_path)
 n = alert(12.9, "signature", "SIG-EICAR", [], 0.12, "file_create", subject(ps_main, explorer), "none", [e],
-          path=eicar_path, file_sha256=EICAR_SHA256)
+          path=eicar_path, file_sha256=EICAR_SHA256,
+          static={"score": None, "reasons": ["SHA-256 match", "YARA rule EICAR_Test_File"]})
 decide(n, 13.0, ["P6-delete-request"],
        [act("request_delete", "executed", at=48.2, reviewed_by="lab-analyst", reviewed_at=48.0)])
 ev(ps_main, "file_delete", "etw", 48.31, path=eicar_path)
 
-# 2. UPX-packed harmless program: heuristic layer, default action.
+# 2. UPX-packed harmless program: heuristic layer, default action. After the pipeline has
+# filled in the process: 0.22 is the ML score of the process tree, and 0.95 is the file's.
 upx_path = upx.image
 e1 = ev(ps_main, "file_create", "etw", 60.207, path=upx_path)
 e2 = ev(upx, "process_start", "etw", 61.022)
 n = alert(61.5, "heuristic", "HEUR-UPX-PACKED", ["T1027.002"], 0.22, "process_start",
-          subject(upx, ps_main, explorer), "none", [e2], path=upx_path, file_sha256=upx.sha)
+          subject(upx, ps_main, explorer), "none", [e2], path=upx_path, file_sha256=upx.sha,
+          static={"score": 0.95, "reasons": [
+              "Packer section name: UPX0",
+              "Packer section name: UPX1",
+              "High entropy in executable section UPX1: 7.84",
+              "Executable section UPX0 has 0 raw bytes but 65536 virtual bytes",
+              "Entry point is outside the first code section (UPX0)",
+          ]})
 decide(n, 61.6, [], [act("alert_only", "executed", at=61.6)])
 ev(upx, "process_stop", "etw", 61.84)
 
@@ -361,6 +376,18 @@ report(n, f"An unsigned program on the Desktop repeatedly contacted a remote add
         f"{clock(421.72)} Firewall rule added by P4-exfil"])
 
 
+# 10. A file scan with no event behind it, which is what scan_file returns by itself.
+tool_path = "C:\\ThreatPulseLab\\samples\\unknown_tool.exe"
+n = alert(480.0, "heuristic", "HEUR-INJECTION-IMPORTS", ["T1055"], None, "file_scan",
+          copy.deepcopy(NO_PROCESS), "none", [], path=tool_path, file_sha256=fake_hash(tool_path),
+          static={"score": 0.6, "reasons": [
+              "Process injection imports: CreateRemoteThread, VirtualAllocEx, WriteProcessMemory",
+              "Very few imports: 3",
+              "Executable section .text has 512 raw bytes but 65536 virtual bytes",
+          ]})
+decide(n, 480.1, [], [act("alert_only", "executed", at=480.1)])
+
+
 def by_id(items, key, value):
     return copy.deepcopy(next(item for item in items if item[key] == value))
 
@@ -376,75 +403,87 @@ def invalid():
     del item["target"]["change"]
     out["event_fim_change_without_change"] = item
 
-    item = by_id(alerts, "alert_id", "a-0003")
+    item = by_id(alerts, "alert_id", sample_id("a", 3))
+    item["alert_id"] = "a-0042"
+    out["alert_old_id_format"] = item
+
+    item = by_id(alerts, "alert_id", sample_id("a", 2))
+    item["static_analysis"]["score"] = 1.4
+    out["alert_static_score_out_of_range"] = item
+
+    item = by_id(alerts, "alert_id", sample_id("a", 2))
+    item["static_analysis"]["reasons"] = []
+    out["alert_static_analysis_without_reasons"] = item
+
+    item = by_id(alerts, "alert_id", sample_id("a", 3))
     item["layer"] = "llm"
     out["alert_bad_layer"] = item
 
-    item = by_id(alerts, "alert_id", "a-0003")
+    item = by_id(alerts, "alert_id", sample_id("a", 3))
     item["risk_score"] = 1.4
     out["alert_risk_score_out_of_range"] = item
 
-    item = by_id(alerts, "alert_id", "a-0003")
-    item["evidence_event_ids"][0] = "a-0001"
+    item = by_id(alerts, "alert_id", sample_id("a", 3))
+    item["evidence_event_ids"][0] = sample_id("a", 1)
     out["alert_bad_evidence_event_id"] = item
 
-    item = by_id(alerts, "alert_id", "a-0005")
+    item = by_id(alerts, "alert_id", sample_id("a", 5))
     item["risk_score"] = 0.5
     out["alert_unknown_subject_scored"] = item
 
-    item = by_id(alerts, "alert_id", "a-0001")
+    item = by_id(alerts, "alert_id", sample_id("a", 1))
     item["evidence_event_ids"] = []
     out["alert_known_subject_no_evidence"] = item
 
-    item = by_id(alerts, "alert_id", "a-0007")
+    item = by_id(alerts, "alert_id", sample_id("a", 7))
     item["rule_id"] = "R-T1486-001"
     out["alert_ml_bad_rule_id"] = item
 
-    item = by_id(decisions, "decision_id", "d-0007")
+    item = by_id(decisions, "decision_id", sample_id("d", 7))
     item["actions"][1]["automatic"] = True
     out["decision_request_kill_automatic"] = item
 
-    item = by_id(decisions, "decision_id", "d-0001")
+    item = by_id(decisions, "decision_id", sample_id("d", 1))
     item["actions"][0]["automatic"] = True
     out["decision_request_delete_automatic"] = item
 
-    item = by_id(decisions, "decision_id", "d-0006")
+    item = by_id(decisions, "decision_id", sample_id("d", 6))
     item["actions"][0]["action"] = "kill"
     out["decision_unknown_action"] = item
 
-    item = by_id(decisions, "decision_id", "d-0004")
+    item = by_id(decisions, "decision_id", sample_id("d", 4))
     del item["actions"][1]["reason"]
     out["decision_skipped_without_reason"] = item
 
-    item = by_id(decisions, "decision_id", "d-0006")
+    item = by_id(decisions, "decision_id", sample_id("d", 6))
     item["actions"][0]["reviewed_by"] = "lab-analyst"
     out["decision_review_fields_on_suspend"] = item
 
-    item = by_id(decisions, "decision_id", "d-0007")
+    item = by_id(decisions, "decision_id", sample_id("d", 7))
     item["actions"][1]["reviewed_by"] = "lab-analyst"
     out["decision_awaiting_with_reviewer"] = item
 
-    item = by_id(decisions, "decision_id", "d-0007")
+    item = by_id(decisions, "decision_id", sample_id("d", 7))
     item["actions"][1]["status"] = "rejected"
     out["decision_rejected_without_reviewer"] = item
 
-    item = by_id(decisions, "decision_id", "d-0001")
+    item = by_id(decisions, "decision_id", sample_id("d", 1))
     del item["actions"][0]["reviewed_by"]
     out["decision_executed_request_without_reviewer"] = item
 
-    item = by_id(decisions, "decision_id", "d-0006")
+    item = by_id(decisions, "decision_id", sample_id("d", 6))
     item["actions"][0]["executed_at"] = None
     out["decision_executed_without_time"] = item
 
-    item = by_id(decisions, "decision_id", "d-0006")
+    item = by_id(decisions, "decision_id", sample_id("d", 6))
     del item["ts"]
     out["decision_missing_ts"] = item
 
-    item = by_id(reports, "report_id", "r-0004")
+    item = by_id(reports, "report_id", sample_id("r", 4))
     item["techniques"][0]["id"] = "T15471"
     out["report_bad_technique_id"] = item
 
-    item = by_id(reports, "report_id", "r-0004")
+    item = by_id(reports, "report_id", sample_id("r", 4))
     del item["validated"]
     out["report_missing_validated"] = item
 

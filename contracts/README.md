@@ -37,6 +37,9 @@ File hashes in the samples are placeholders, derived from the image path so they
 
 ## Keep in mind
 
+- Alert IDs use the same format as event IDs: `a-<run start UTC>-<counter>`. Decisions and reports keep the same suffix (`d-…`, `r-…`).
+- `static_analysis` holds what file analysis found. It is for analysts and reports only: the policy engine ignores it, and it never feeds `risk_score`.
+- The two heuristic samples show both stages of an alert. `…-000010` is what `scan_file` returns alone: no process, `event_type` `file_scan`, `risk_score` null. `…-000002` is the same kind of alert after the pipeline fills in the process, evidence and ML score, so its 0.22 is the process tree's score and its 0.95 the file's.
 - `event.schema.json` comes from Track A. When it changes, update the samples and the copied values listed in `tests/test_contracts.py`.
 - `events.jsonl` includes `fim_change` events, as the merged view. The agent writes those to its own `fim.jsonl`.
 - `events.jsonl` is not strictly time-ordered, like real agent output. Sort by `ts`.

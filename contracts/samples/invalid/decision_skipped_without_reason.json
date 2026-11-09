@@ -1,6 +1,6 @@
 {
-  "decision_id": "d-0004",
-  "alert_id": "a-0004",
+  "decision_id": "d-20261105T093000-000004",
+  "alert_id": "a-20261105T093000-000004",
   "ts": "2026-11-05T09:33:01.600Z",
   "policy_rules": [
     "P2-persistence-change",

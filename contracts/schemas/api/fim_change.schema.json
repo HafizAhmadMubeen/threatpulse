@@ -32,7 +32,7 @@
     "alert_id": {
       "description": "The alert with this event as evidence. Null if there is none yet.",
       "type": ["string", "null"],
-      "pattern": "^a-[0-9]{4,}$"
+      "pattern": "^a-[0-9]{8}T[0-9]{6}-[0-9]{6,}$"
     },
     "status": { "enum": ["pending", "approved"] },
     "reviewed_by": { "type": "string", "minLength": 1 },
