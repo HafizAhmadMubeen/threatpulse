@@ -12,7 +12,7 @@ Architecture decisions are made outside Claude Code and recorded in `PLANNING.md
 | Track | Owner | Owns (folders) |
 |---|---|---|
 | A: Sense & Enforce | Ahmed Mubeen (repository lead, runs the lab VM) | `agent/`, `policy/`, `rules/policy.yaml`, `.claude/`, repo settings |
-| B: Detect & Score | Haider Shahid / Ahmed Muaz | `detection/`, `triage/`, `rules/yara/`, `rules/behaviour/` |
+| B: Detect & Score | Haider Shahid / Ahmed Muaz | `detection/`, `triage/`, `rules/yara/`, `rules/behaviour/`, `rules/hashes/` |
 | C: Explain & Show | Haider Shahid / Ahmed Muaz | `backend/`, `frontend/` |
 
 Only Track A has a lab VM. Tracks B and C work in WSL only; their VM-only checks are run by Track A.
@@ -45,14 +45,15 @@ agent (C++)  -> events.jsonl -> detection layers (B) -> Alert
 
 - Formats: **Event, Alert, Decision, Report** (JSON Schemas + samples in `contracts/`, described in PLANNING.md Section 5).
 - Python function contracts: `scan_file`, `match_rules`, `score_process` (B), `decide`, `execute` (A), `write_report` (C). See ROADMAP.md Section 2.
+- `scan_file` has a path and no process, so its alerts have no known process. The orchestrator fills in the process when an event triggered the scan (ROADMAP.md Section 2).
 - Until a real function exists, a **stub returning sample data** stands in, so tracks never block each other.
 
 ## Tech stack
 
 - **Agent:** C++, ETW via Microsoft's `krabsetw`, Sysmon events via `EvtSubscribe`. User-mode only.
-- **Detection:** `yara-python`, `pefile`, EMBER features.
-- **Triage:** Python, XGBoost.
-- **Backend:** FastAPI. **RAG:** LangChain + ChromaDB + MITRE ATT&CK STIX data.
+- **Detection:** `yara-python`, `pefile`, PyYAML (`safe_load` only), EMBER features.
+- **Triage:** Python, XGBoost (`xgboost-cpu`, CPU only, no scikit-learn).
+- **Backend:** FastAPI. **RAG:** ChromaDB + MITRE ATT&CK STIX data, with no framework. **Embeddings:** all-MiniLM-L6-v2 through onnxruntime, local and CPU only.
 - **Frontend:** React (Vite).
 - **Tests and demos:** Atomic Red Team, EICAR test file, our own harmless scripts.
 
@@ -60,8 +61,8 @@ agent (C++)  -> events.jsonl -> detection layers (B) -> Alert
 
 | Zone | Threat | Response |
 |---|---|---|
-| Document folders | Ransomware | Controlled Folder Access + own detector (write rate + entropy) → suspend |
-| Run/RunOnce keys, startup folders, hosts file | Persistence | FIM detects → restore every unapproved change → suspend origin only if risk score is high and it's still running |
+| Document folders | Ransomware | Controlled Folder Access + own detector (a delete burst, `R-T1486-001`, plus the entropy of the files written, `R-T1486-002`) → suspend. The burst alone stays alert-only |
+| Run/RunOnce keys, startup folders, hosts file | Persistence | FIM detects → restore every unapproved change that still differs from the baseline after about 2 seconds → suspend origin only if risk score is high and it's still running |
 | LSASS memory | Credential dumping | Sysmon Event ID 10 with memory-read access, not in allowlist → suspend (alert-only while in learning mode). With LSA protection on no access is recorded: see Accepted limitations |
 | Network | Exfiltration / C2 | Per-program Windows Firewall block rule |
 
@@ -105,11 +106,11 @@ Commits and pull requests: never add Co-Authored-By lines or 'Generated with Cla
 
 ## Non-negotiable design rules
 
-1. **The LLM never triggers enforcement.** Enforcement comes only from the deterministic policy engine. `policy/` must never import from the RAG/LLM code, and policy code never reads LLM output.
-2. **No lethal trifecta.** The RAG agent has **no tools**: no HTTP requests to arbitrary URLs, no email, no shell, no process control. All telemetry text is data: wrapped in `<telemetry>…</telemetry>` in the user message, never put in the system prompt.
+1. **The LLM never triggers enforcement.** Enforcement comes only from the deterministic policy engine. `policy/` must never import from the RAG/LLM code, and policy code never reads LLM output. Static file analysis (`static_analysis`) never feeds enforcement either: the policy engine ignores it.
+2. **No lethal trifecta.** The RAG agent has **no tools**: no HTTP requests to arbitrary URLs, no email, no shell, no process control. All telemetry text is data: wrapped in `<telemetry>…</telemetry>` in the user message, never put in the system prompt. `static_analysis.reasons` counts as telemetry, and telemetry is escaped so that a value cannot close the tag.
 3. **Human-in-the-loop.** Automatic actions: suspend, block network, restore from baseline only. Kill/delete require analyst approval on the dashboard.
-4. **LLM only after triage.** Never send raw event streams to the LLM.
-5. **Grounded reports.** Every technique ID in a report is checked against the ATT&CK STIX data. Invalid IDs are removed or the report is regenerated.
+4. **LLM only after triage.** Never send raw event streams to the LLM. A report is written when `risk_score >= 0.80` or the severity is Confirmed (a signature match, a FIM change in a protected zone, or `R-T1486-002`). A null score never counts.
+5. **Grounded reports.** Every technique ID in a report is checked against the ATT&CK STIX data. Invalid IDs are removed or the report is regenerated. A revoked ID is invalid, and the validator reports the active ID that replaced it.
 6. **No live malware**, VM only.
 
 ## ML rules (to avoid fake-good results)
@@ -118,6 +119,8 @@ Commits and pull requests: never add Co-Authored-By lines or 'Generated with Cla
 - Split train/test **by recording session**, never by individual event.
 - Report results on **held-out techniques** and false-positive rate, not only accuracy.
 - EMBER is used **only** for the static file model. The behavioural model is trained on our own agent's data.
+- The feature extractor writes network mode, pool, batch and label as metadata columns that are never features, and builds process trees from parents, never from the label.
+- The model leaves out `n_fim_changes_linked`, because a tree's own events hold no FIM events. It is saved as XGBoost JSON, never pickle. Class weights make its scores uncalibrated.
 
 ## Current decisions
 
@@ -134,10 +137,9 @@ The full list is in PLANNING.md Section 10.
 | Containment | Limited containment is in scope |
 | Phase order | PHASES.md is authoritative for steps. PLANNING.md for design, contracts and gates |
 | Scope | The design covers the C++ ETW agent, all layers and all zones. The current release is the subset in PLANNING.md Section 2.1. Future work: batch 9 (T1685) and further batches, the FIM evidence session, the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub), backend API authentication, a full live end-to-end integration and an LSASS demonstration. For how to continue, see docs/handover.md |
+| Vector DB | ChromaDB, stored locally. No LangChain |
 | Lab | One lab VM (Track A). B and C develop in WSL only |
 | LLM | Gemini free tier through a **provider-agnostic client** (switching provider is one setting, `LLM_PROVIDER`). Local Ollama is the fallback and Groq an alternative. Keys (`GEMINI_API_KEY`, `GROQ_API_KEY`) only in `.env` (gitignored, template `.env.example`), never in code, logs or commits. Only triaged alerts from the lab VM are ever sent |
-
-**Still open:** ChromaDB vs FAISS (ChromaDB recommended). Don't decide this in code; ask.
 
 ## Accepted limitations
 

@@ -9,7 +9,7 @@ Read first, in this order: [README.md](../README.md), [CLAUDE.md](../CLAUDE.md),
 Contents:
 1. [Rules to keep](#1-rules-to-keep)
 2. [Status per generation](#2-status-per-generation)
-3. [Branches and merge order](#3-branches-and-merge-order)
+3. [Branches and how they were merged](#3-branches-and-how-they-were-merged)
 4. [Resuming VM work](#4-resuming-vm-work)
 5. [NAT lessons](#5-nat-lessons)
 6. [Where the data lives](#6-where-the-data-lives)
@@ -41,7 +41,7 @@ These are in CLAUDE.md and PLANNING.md. They are repeated here because breaking 
 Terms: *verified in the VM* means it ran in the lab VM against real Windows behaviour. *Verified on recordings* means it ran in WSL over the exported recordings. *Unit-tested* means tested in WSL against sample data or a fake, and not run in the VM. The authoritative table is PLANNING.md Section 2.1.
 
 ### 1st generation: signatures
-- **Implemented:** SHA-256 known-bad list, YARA rules (test marker and EICAR), `scan_file` (branch `track-b/signatures`, `detection/`).
+- **Implemented:** SHA-256 known-bad list, YARA rules (test marker and EICAR), `scan_file` (`detection/`).
 - **Verified:** unit-tested, with the test-marker file on the host.
 - **Left:** the EICAR check in the VM (section 8.3).
 
@@ -63,39 +63,34 @@ Terms: *verified in the VM* means it ran in the lab VM against real Windows beha
 
 ---
 
-## 3. Branches and merge order
+## 3. Branches and how they were merged
 
-`main` already contains `track-a/agent`, `track-a/sysmon-fim`, `track-c/foundation`, and `track-a/atomic` up to the commit that states the LSASS limitation. Nothing is merged for you: merge through pull requests.
+The branches below are merged into `main` through pull requests, with regular merge commits and not squash. The branches are stacked (each contains its parent), so a squash would have made every later pull request show its parents' commits again. Every remote branch below is fully merged, so each can be deleted when it is no longer needed.
 
-### Which branch holds what
+### What each branch added
 
-| Branch | Holds | Depends on |
-|---|---|---|
-| `track-a/atomic` | The remaining documentation commits: the release scope, the LLM decision with `.env.example`, the corrected T1003.001 counts, this handover | `main` |
-| `track-a/fim-session` | The FIM evidence session: the `fim-test` entry and `excluded_from_ml_pools` in `agent/config/recording_tests.json`, `agent/tools/vm_fim_session.ps1`, tests, docs | `track-a/atomic` (a few commits behind its tip) |
-| `track-b/signatures` | `scan_file` (hash list, YARA, `pefile` heuristics); contract changes: run-based alert IDs, `static_analysis`, `file_scan` | `main` |
-| `track-c/rag` | ATT&CK retrieval, technique-ID validator, prompt template; `docs/notes/lane2-doc-updates.md` | `track-b/signatures` |
-| `track-b/rules` | Behaviour rules, `match_rules`, feature extraction | `track-c/rag` |
-| `track-a/policy-engine` | `decide()` with rules P1 to P6; contract changes: `pending` status, action `target`, `process.microsoft_root` | `track-b/rules` |
-| `track-a/enforcement` | `execute()`, undo and the Windows actions, `vm_test_enforcement.ps1`. It also contains `policy-engine` | `track-a/policy-engine` |
-| `track-c/orchestrator` | The replay pipeline (detection, policy, report stub) | `track-a/policy-engine` |
-| `track-b/entropy` | `R-T1486-002`, policy rule P3b, `--read-files` | `track-c/orchestrator` |
-| `track-b/training` | The XGBoost model, `score_process`, leave-one-batch-out evaluation, the rule evaluation. It skips sessions of pools listed in `excluded_from_ml_pools` | `track-b/entropy` |
+| Branch | Added |
+|---|---|
+| `track-a/atomic` | The release scope, the LLM decision with `.env.example`, the corrected T1003.001 counts, this handover and the six-batch results in the docs |
+| `track-a/fim-session` | The FIM evidence session: the `fim-test` entry and `excluded_from_ml_pools` in `agent/config/recording_tests.json`, `agent/tools/vm_fim_session.ps1`, tests, docs |
+| `track-b/signatures` | `scan_file` (hash list, YARA, `pefile` heuristics); contract changes: run-based alert IDs, `static_analysis`, `file_scan` |
+| `track-c/rag` | ATT&CK retrieval, technique-ID validator, prompt template; `docs/notes/lane2-doc-updates.md` |
+| `track-b/rules` | Behaviour rules, `match_rules`, feature extraction |
+| `track-a/policy-engine` | `decide()` with rules P1 to P6; contract changes: `pending` status, action `target`, `process.microsoft_root` |
+| `track-a/enforcement` | `execute()`, undo and the Windows actions, `vm_test_enforcement.ps1` |
+| `track-c/orchestrator` | The replay pipeline (detection, policy, report stub) |
+| `track-b/entropy` | `R-T1486-002`, policy rule P3b, `--read-files` |
+| `track-b/training` | The XGBoost model, `score_process`, leave-one-batch-out evaluation, the rule evaluation. It skips sessions of pools listed in `excluded_from_ml_pools` |
 
-The Track B, Track C and policy branches form one stack: each contains its parent, so a pull request for a branch shows only its own commits if its parents are merged first.
+### The order used, and why it mattered
 
-### Merge order
+1. `track-a/atomic`, then `track-a/fim-session`. `track-b/training` requires the key `excluded_from_ml_pools` in `agent/config/recording_tests.json` and stops with an error if the file or the key is missing, and that key came with `fim-session`. So `fim-session` had to merge first. `track-a/atomic` was merged into `fim-session` beforehand, which resolved the one text conflict between them (three adjacent rows of `PLANNING.md` Section 10).
+2. The stack, in order: `track-b/signatures`, `track-c/rag`, `track-b/rules`, `track-a/policy-engine`. `signatures` and `policy-engine` changed `contracts/`, which needs all three members to agree.
+3. `track-a/enforcement`, then `track-c/orchestrator`, `track-b/entropy` and `track-b/training`.
+4. The documentation sync from `docs/notes/lane2-doc-updates.md` (`track-a/docs-sync`), last, applied to `CLAUDE.md`, `README.md`, `PLANNING.md`, `PHASES.md` and `ROADMAP.md` after re-checking each item against the merged docs.
 
-1. **`track-a/atomic`.** It is independent of the stack, and the Lane 2 notes say to apply their documentation changes after it merges.
-2. **`track-a/fim-session`.** It **must merge before `track-b/training`.** Track B's training loader and rule evaluation require the key `excluded_from_ml_pools` in `agent/config/recording_tests.json` and stop with an error if it is missing, and that key exists only on this branch. Merge `track-a/atomic` first. The branch already contains `atomic` (it was merged into it, with a normal merge commit), and the one conflict that merge had, in three adjacent rows of `PLANNING.md` Section 10, is resolved: `atomic`'s "Recording plan" and "Recording batches" rows (46 sessions, batches 1 to 6) and `fim-session`'s "Dataset fields" row (it names the `fim-test-only` pool). The two sentences that said Track B's loaders still had to be told to skip the pool are reworded, because `track-b/training` skips it.
-3. **The stack, in order:** `track-b/signatures`, `track-c/rag`, `track-b/rules`, `track-a/policy-engine`.
-4. **`track-a/enforcement`**, any time after `policy-engine`. Merging it before the stack is complete would pull the whole stack into one pull request.
-5. **`track-c/orchestrator`, `track-b/entropy`, then `track-b/training`.** Training is last, and it was still receiving commits when this was written.
-6. **A documentation sync** from `docs/notes/lane2-doc-updates.md`: one documentation-only branch from `main`, after the branches above are merged, with one commit per target document (`CLAUDE.md`, `README.md`, `PLANNING.md`, `PHASES.md`, `ROADMAP.md`). The notes are instructions, not patches, and they were written against an earlier state of those files, so re-check each item before applying it.
+**If GitHub says "Can't automatically merge" although a local merge is clean.** This happened to `track-a/enforcement`. It had merged both `atomic` and `policy-engine` into itself, and `main` had also merged both through other pull requests, so the two had two merge bases (a criss-cross). Git's merge machinery combines them, but GitHub's compare page used one, so it listed 116 files and conflicts. The fix was a normal merge of `origin/main` into the branch, after which the merge base is a single commit. Check `git merge-base --all origin/main <branch>` before opening a pull request. If it prints more than one commit, merge `origin/main` into the branch first, with a normal merge commit and no rebase or force-push.
 
-Before merging: `track-b/signatures` and `track-a/policy-engine` change `contracts/`, and such changes need all three members to agree.
-
-At the time of writing, a trial merge of every pair of these branches that shares a file gave no conflict once `track-a/fim-session` contains `atomic`, which it now does. The pairs (`ROADMAP.md` between `atomic` or `fim-session` and `enforcement`, and `policy/README.md` and `.gitignore` between `enforcement` and the Track B branches) merge without conflict. Repeat the trial (`git merge-tree <merge-base> <a> <b>`, and look for conflict markers) before merging if any branch has moved.
 
 ---
 
@@ -229,7 +224,7 @@ vm-export/
 | Enforcement test | VM only | `agent/tools/vm_test_enforcement.ps1` (section 8.5) |
 | File-layer checks | VM only | `detection/VM_TEST_PLAN.md` (section 8.3) |
 
-A clean run on the `track-a/enforcement` branch had 724 passed and 20 skipped in the root suite (the skips are the tests that need the downloaded ATT&CK data), and the agent suite had 135 passed on the `track-a/fim-session` branch. Numbers differ by branch. Not every branch contains every suite.
+A clean run on `main` had 950 passed and 20 skipped in the root suite (the skips are the tests that need the downloaded ATT&CK data), 135 passed in the agent suite, and 52 passed in the dashboard tests, with the type check and the build passing, and 0 problems in the contract samples.
 
 ---
 
@@ -246,15 +241,14 @@ Adds the third held-out technique.
 5. Update the counts: 47 sessions, T1685 1 of 3, and the held-out evaluation can then cover three techniques. Batches 10 and 11 (runs 2 and 3) are optional.
 
 ### 8.2 The FIM evidence session
-Built, unit-tested and ready on the branch `track-a/fim-session`; not run in the VM. It records a hosts-file change and a Startup-folder change as one short session in its own pool, `fim-test-only`, which is kept out of training and evaluation.
-1. Boot `atomic-ready-3.2`, set the adapter to NAT, fetch the branch (`git fetch origin`, `git switch track-a/fim-session`), then set the adapter back to host-only.
+Built, unit-tested and merged; not run in the VM. It records a hosts-file change and a Startup-folder change as one short session in its own pool, `fim-test-only`, which is kept out of training and evaluation.
+1. Boot `atomic-ready-3.2`, set the adapter to NAT, update the repository (`git pull`), then set the adapter back to host-only.
 2. `.\agent\tools\record_session.ps1 -TestId fim-test -Run 1 -Network host-only`
 3. Check the session folder: `validate_events.py` on `events.jsonl` and `fim.jsonl`, then `check_fim_run.py <session>\fim.jsonl C:\ThreatPulseLab\logs\fim_test_keys.txt --events <session>\events.jsonl`.
 4. Export into a folder of its own (for example `vm-export\fim-test-01`), never into a batch folder, and roll back. Label with `label_session.py --batch` into `fim-test-01-labels`.
-5. Merge `track-a/fim-session` before `track-b/training` (section 3, which also lists the conflict to resolve and the two sentences to reword).
 
 ### 8.3 EICAR and UPX check (Gate 1)
-The full text, with the expected output of every step, is `detection/VM_TEST_PLAN.md` on the branch `track-b/signatures`. In outline, inside the VM only:
+The full text, with the expected output of every step, is `detection/VM_TEST_PLAN.md`. In outline, inside the VM only:
 1. Take the snapshot `pre-scan-test`. Do not switch branches in a repository a batch is using: use a separate clone, or do this after recording.
 2. Create a Python 3.12 virtual environment with `yara-python==4.5.4`, `pefile==2024.8.26` and `jsonschema`. Create `C:\ThreatPulseLab\scan-test` and add a Defender exclusion for that one empty folder, inside the VM only.
 3. Marker file: `python -m detection` on it should give hash `TEST-MARKER`, YARA `ThreatPulse_Test_Marker` and one alert `SIG-TEST-MARKER`.
@@ -313,7 +307,7 @@ The Defender event IDs are from Microsoft's event list as remembered (1015 suspi
 **If Defender is blocking,** the options are: accept T1105 as a documented limitation (no cost, no model signal); put the one blocking ASR rule into audit mode in the VM only (small change, applies only to the NAT boot); a scan exclusion for the output file (it may not help, since it only skips file scanning); or replace the test material with a harmless script of our own (a new script, a documented decision, and a new NAT boot with the preparation of section 5). Do not turn Defender components off: it differs by network mode, adds a hidden second confound, and the project never changes Defender to alter a result. Never touch Defender on the host.
 
 ### 8.5 The enforcement test in the VM
-On the branch `track-a/enforcement`. It runs every action and its undo on harmless targets (copies of `ping.exe`, a dummy Run value, a dummy Startup file, a dummy file) and never touches a real system process.
+It runs every action and its undo on harmless targets (copies of `ping.exe`, a dummy Run value, a dummy Startup file, a dummy file) and never touches a real system process.
 1. Prerequisites: a Python 3.12 virtual environment at `C:\ThreatPulseLab\venv-policy` with `pyyaml==6.0.3` and `jsonschema`, and the built agent (the never-suspend re-check uses its `--check-image`).
 2. Not while a batch is recording, and not from a snapshot used for recording. In a 64-bit PowerShell as administrator, as `lab`: `.\agent\tools\vm_test_enforcement.ps1`. Add `-SkipNeverSuspend` to skip check 8, and `-TestCfa` to test Controlled Folder Access, which must be last and never before a recording snapshot.
 3. Pass: every line `PASS` and exit code 0. Roll back afterwards: the journal and quarantine files stay.

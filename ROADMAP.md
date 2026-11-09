@@ -10,7 +10,7 @@ The tasks below are the full plan. The current release is the subset in [PLANNIN
 
 | Track | In the release | Future work |
 |---|---|---|
-| **A** | Agent, FIM, policy engine, the enforcement actions with their undo (unit-tested, the VM test is to run), the dataset (batches 1 to 6, 46 sessions, batch 6 the NAT batch), live zone demos for documents and persistence | Batch 9 (T1685) and further batches, the FIM evidence session (ready on `track-a/fim-session`), the T1105 diagnostic, the LSASS allowlist and enforcing mode, a live run of the agent feeding the pipeline, a demonstration of the LSASS zone |
+| **A** | Agent, FIM, policy engine, the enforcement actions with their undo (unit-tested, the VM test is to run), the dataset (batches 1 to 6, 46 sessions, batch 6 the NAT batch), live zone demos for documents and persistence | Batch 9 (T1685) and further batches, the FIM evidence session (built and merged, not yet run in the VM), the T1105 diagnostic, the LSASS allowlist and enforcing mode, a live run of the agent feeding the pipeline, a demonstration of the LSASS zone |
 | **B** | Hash list, YARA, `pefile` heuristics, behaviour rules, feature extraction, XGBoost triage, the ransomware entropy check, the evaluation (leave-one-batch-out, per-technique table with two held-out techniques, false-positive rate, rule-layer results) | The EMBER static model, tuning thresholds on live data |
 | **C** | Backend, ATT&CK vector DB, retrieval, prompt template, report validator, the dashboard demo from replayed sessions, the enforcement half of the prompt-injection demo, the demo video | The LLM report writer (`write_report`), connecting an approval to an action, backend API authentication |
 | **All** | Verification in the VM (EICAR and UPX, entropy, enforcement test), the evaluation report, the design review | A full live end-to-end integration |
@@ -37,10 +37,12 @@ The pipeline has three natural parts. Each track is owned end to end.
 | `policy/` | A | Read only |
 | `detection/`, `triage/` | B | Read only |
 | `backend/`, `frontend/` | C | Read only |
-| `rules/yara/`, `rules/behaviour/` | B | Suggest via pull request |
+| `rules/yara/`, `rules/behaviour/`, `rules/hashes/` | B | Suggest via pull request |
 | `rules/policy.yaml` | A | Suggest via pull request |
 | `.claude/`, `.gitignore`, repo settings | A (repository lead) | Suggest via pull request |
 | `contracts/` | **Everyone, changes need all 3 to agree** | — |
+| `data/attack/` (ATT&CK data, model and index: downloaded, not in git) | C | Read only |
+| `tests/` | Everyone | — |
 | `data/`, `docs/` | Everyone | — |
 
 ## 2. How we stay independent
@@ -63,10 +65,10 @@ The pipeline has three natural parts. Each track is owned end to end.
 # Track B: detection/  and  triage/
 def scan_file(path: str) -> list[Alert]: ...            # hash + YARA + static heuristics
 def match_rules(event: Event) -> list[Alert]: ...       # behaviour rules
-def score_process(events: list[Event]) -> float: ...    # XGBoost risk score, 0.0–1.0
+def score_process(events: list[Event]) -> float | None: ...    # XGBoost risk score, 0.0–1.0. None = not scored
 
 # Track A: policy/
-def decide(alert: Alert, context: dict) -> Decision: ...   # ABAC, deterministic
+def decide(alert: Alert, context=None, policy=None) -> Decision: ...   # ABAC, deterministic
 def execute(decision: Decision, alert: Alert) -> Decision: ...   # runs the actions in the lab VM, updates status
 
 # Track C: backend/
@@ -75,12 +77,22 @@ def write_report(alert: Alert, events: list[Event]) -> Report: ...  # LLM, text 
 
 Until a real function exists, its owner provides a **stub** that returns sample data. That way the other tracks can call it from day one.
 
+Notes on the functions:
+- **`scan_file`** has a path and no process, so it returns no-process alerts with `event_type` `file_scan`. The orchestrator fills in the process, the evidence and the `risk_score` when an event triggered the scan.
+- **`match_rules(event)`** keeps state, so events must arrive in time order (`detection/replay.py` sorts them).
+- **`score_process(events)`** takes the events of the process tree that contains the alerting process, cut at the first ancestor whose start was not seen, and nothing else. It returns `None`, which is not the same as 0.0, when there is no model, the model is damaged or has a different feature list, the events are not one tree with an observed start, or an event is malformed. The model is used in the pipeline only with `--use-model`.
+- **`decide`** reads `context` keys `now`, `suspended_pids`, `fim` (`differs_from_baseline`, `settled_seconds`) and `writer_tree`. The orchestrator supplies them: `fim` after the debounce wait, and a `writer_tree` for FIM alerts. In a replay `suspended_pids` is always empty. A rule's `when` can test `rule_id`.
+- **`write_report`** is `backend/pipeline/report_stub.py` today. The real one is `backend.rag.prompt.build_messages` plus a provider client.
+
 Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 
 - **Alerts with no known process** have `pid` 0, `image` `"unknown"`, `signed` false, `trusted_path` false and `risk_score` null. `evidence_event_ids` may be empty only then.
 - **`risk_score` is nullable.** Null means not scored, and `decide` treats null as not matching `risk_score_gte`.
-- **`rule_id`** is `ML-TRIAGE` for `ml` alerts and `SIG-<name>` for `signature` alerts.
-- **Decisions** have a decision-level `ts`, and each action has `executed_at`. `request_kill` and `request_delete` have `reviewed_by` and `reviewed_at`, set on approve or reject. Automatic actions use only `executed`, `failed` and `skipped`. `reason` is required on `skipped` and `failed`, and `policy_rules` may be empty.
+- **`rule_id`** is `ML-TRIAGE` for `ml` alerts, `SIG-<name>` for `signature` alerts, `HEUR-<name>` for `heuristic` alerts and `R-<technique>-<number>` for rule alerts. `R-T1486-002` has layer `rule` and a null `risk_score`, and is raised by the pipeline.
+- **`layer`** of a `match_rules` alert is `rule` or `fim`. A `fim` alert has no known process and a null `risk_score`.
+- **`static_analysis`** is optional and holds what file analysis found. The policy engine ignores it, and `event_type` can be `file_scan` for a scan with no triggering event.
+- **Alert, decision and report IDs** are `a-<run start UTC>-<counter>`, `d-…` and `r-…` with the alert's suffix, so they stay unique across runs.
+- **Decisions** have a decision-level `ts`, and each action has `executed_at`. `reviewed_by` and `reviewed_at` are required once a request action is approved, rejected, executed or failed, and stay after it runs. They are forbidden on `awaiting_approval` and on automatic actions. Automatic actions use only `pending`, `executed`, `failed` and `skipped`. `reason` is required on `skipped` and `failed`, and `policy_rules` may be empty.
 - **`execute` takes the Alert too.** A `restore` or `request_delete` action names no item, so the registry value or file comes from `alert.object`; process actions use the `target` in the Decision. It acts only in the lab VM, and a request action only once it is `approved`. Details: `policy/README.md`.
 - **`/fim/changes/{id}/approve`** takes the `event_id` of the `fim_change` event as `{id}`.
 
@@ -113,7 +125,7 @@ Rules these functions share (PLANNING.md 5.2, 5.3 and 5.5):
 |---|---|---|
 | **A** | Add network events and Sysmon Event IDs 3 (network), 10 (LSASS access), 12 and 13 (registry). FIM module for Run/RunOnce keys, startup folders, hosts file. **Record the dataset**: benign sessions, Atomic runs and our T1486 script, labelled by the launched process tree. **Release: batches 1 to 6 only, 46 sessions (PLANNING.md 2.1). T1685 is not recorded.** Export logs before each rollback (PLANNING.md 3.2) | Labelled dataset shared with B (shared folder or drive, not the repo) |
 | **B** | Behaviour rules in Sigma-style YAML for each test technique, and `match_rules`. Feature extraction code written and tested on sample events or public pre-recorded data (e.g. OTRF Security-Datasets converted to our schema). Train the EMBER static model **(future work)** | Each rule fires on its sample; features compute without errors |
-| **C** | Load ATT&CK STIX data into ChromaDB. Retrieval tests. RAG prompt template with `<telemetry>` delimiters. Compare two Gemini models on a sample report, and check that the local Ollama fallback produces a valid report **(future work, with `write_report`)**. Dashboard pages for decisions, reports and FIM change approval (mock data) | "process reads LSASS memory" retrieves T1003.001 |
+| **C** | Load ATT&CK STIX data (Enterprise v20.1, pinned by hash) into ChromaDB with the local all-MiniLM-L6-v2 embedding model. Retrieval tests. RAG prompt template with `<telemetry>` delimiters. Compare two Gemini models on a sample report, and check that the local Ollama fallback produces a valid report **(future work, with `write_report`)**. Dashboard pages for decisions, reports and FIM change approval (mock data) | "process reads LSASS memory" retrieves T1003.001 |
 
 **Dependency (small):** B needs A's labelled dataset **at the end of Phase 2** to train the real model. Until then B builds and tests the feature code on samples and public data, so B never stops working.
 
@@ -137,7 +149,7 @@ All three work together on `main`. Each fixes problems in their own track.
 |---|---|
 | **A** | Run the agent live in the lab VM feeding the pipeline **(future work)**. Fix enforcement issues. Run the four zone demos **(release: documents and persistence, screen-recorded. The network zone's block action is verified by the enforcement test, and the LSASS demo is future work)** |
 | **B** | Tune thresholds on live data **(future work)**. Fix false positives. Confirm rules and model work on live agent output **(future work)** |
-| **C** | Connect the real functions in place of the stubs. Add the approve/reject flow **(future work: the API records the decision and nothing acts on it; connecting it to an action needs backend API authentication)**. Build the prompt-injection demo. Polish the dashboard |
+| **C** | Connect the real functions in place of the stubs. Live use also needs a runner that feeds events as they arrive and calls `execute`, with the replay pipeline as the model for it: decisions for persistence changes wait for the debounce. Add the approve/reject flow **(future work: the API records the decision and nothing acts on it; connecting it to an action needs backend API authentication)**. Build the prompt-injection demo. Polish the dashboard |
 
 **Gate 4 checklist:** see PLANNING.md Phase 4, including its release-scope note.
 

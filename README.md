@@ -83,7 +83,7 @@ The sections above describe the full design. The current release is the part of 
 
 **Documented limitations:** T1003.001 and T1105 (the model flags 0 of 5 and 0 of 2, and they are not counted in recall; the rules caught 4 of 5 and 0 of 2). In both, the recorded test parts hold no technique behaviour. With LSA protection on, the sensors record no access to LSASS ([PLANNING.md](PLANNING.md) Section 4.3), and in both T1105 sessions no process, file or connection follows the `cmd.exe` that starts the download.
 
-**Future work:** batch 9 (T1685) and further recording batches, the FIM evidence session (ready on a branch), the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub, and the provider is decided), backend API authentication, a full live end-to-end integration, and a demonstration of the LSASS zone.
+**Future work:** batch 9 (T1685) and further recording batches, the FIM evidence session (built and merged, not yet run in the VM), the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub, and the provider is decided), backend API authentication, a full live end-to-end integration, and a demonstration of the LSASS zone.
 
 The full list, with session counts, is in [PLANNING.md](PLANNING.md#21-release-scope) Section 2.1. To continue the project, see [docs/handover.md](docs/handover.md).
 
@@ -101,26 +101,38 @@ The full list, with session counts, is in [PLANNING.md](PLANNING.md#21-release-s
 |---|---|
 | Endpoint agent | C++, Windows ETW (via Microsoft's `krabsetw`), Sysmon |
 | Signatures & heuristics | YARA, `pefile`. EMBER features for the static model (future work) |
-| Triage | Python, XGBoost |
+| Triage | Python, XGBoost (CPU only) |
 | Backend | FastAPI |
-| RAG agent | LangChain, ChromaDB, MITRE ATT&CK STIX data |
+| RAG agent | ChromaDB, MITRE ATT&CK STIX data (no framework) |
 | Dashboard | React |
 | Testing | Atomic Red Team, EICAR test file, harmless custom simulation scripts |
 
-## Repository structure (planned)
+## Repository structure
 
 ```
-agent/        C++ endpoint agent (ETW + Sysmon collection, FIM)
-detection/    Signature, heuristic and behaviour-rule layers
-triage/       Feature extraction, XGBoost training, model files
+agent/        C++ endpoint agent (ETW + Sysmon collection), FIM, and the recording tools
+detection/    Signature, heuristic and behaviour-rule layers, the entropy check, the rule evaluation
+triage/       Feature extraction, XGBoost training and scoring. The trained model goes in triage/models/ (gitignored)
 policy/       ABAC policy engine and enforcement actions
-backend/      FastAPI service, pipeline orchestration, RAG agent
+backend/      FastAPI service, replay pipeline, RAG agent
 frontend/     React dashboard
-rules/        YARA rules, behaviour rules, policy rules (YAML)
-contracts/    JSON schemas and sample data shared between components
-data/         ATT&CK data, hash lists, simulated logs (no live malware)
-docs/         Architecture, setup guides, evaluation reports
+rules/        hashes/ (known-bad SHA-256 list), yara/, behaviour/ (Sigma-style YAML, one file per technique), policy.yaml
+contracts/    JSON schemas and sample data shared between components, with tools/ (the sample generator)
+tests/        Python tests for the root packages
+data/         attack/ (ATT&CK data, embedding model and index: downloaded, not in git) and runs/ (reports, not in git)
+docs/         Handover, lab setup and working notes
 ```
+
+## Setup (WSL)
+
+```bash
+uv sync
+uv run python -m backend.rag.fetch   # ATT&CK data and the embedding model, hash-checked
+uv run python -m backend.rag.index   # local vector index
+uv run pytest
+```
+
+The RAG needs the two `backend.rag` commands after `uv sync`. They download about 140 MB into `data/attack/`, which git ignores. Until they are run, the tests that use the ATT&CK data are skipped. `python -m triage.train` writes the trained model to `triage/models/` (see [triage/README.md](triage/README.md)). The agent and the VM steps are described in [agent/README.md](agent/README.md) and [docs/handover.md](docs/handover.md).
 
 ## Safety and ethics
 

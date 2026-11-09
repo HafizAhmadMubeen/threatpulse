@@ -56,7 +56,7 @@ Everything above is the full design, and the design text stays as it is. The cur
 | Ransomware entropy rule `R-T1486-002` | Implemented | Unit-tested, and replayed without reading files. The VM check with `--read-files` has not been run |
 | XGBoost triage and `score_process` | Implemented, preliminary | Verified on recordings: leave-one-batch-out over batches 1 to 6 (results below). Scoring at alert time is worse than in the evaluation, so `--use-model` stays off. Not run live |
 | ABAC policy engine (`decide`) | Implemented | Unit-tested rule by rule, with a test that `policy/` imports nothing from the RAG or LLM code |
-| Enforcement (`execute`, undo, VM guard, never-suspend re-check) | Implemented on the branch `track-a/enforcement` | Unit-tested against a fake Windows API only. `agent/tools/vm_test_enforcement.ps1` is written and has not been run |
+| Enforcement (`execute`, undo, VM guard, never-suspend re-check) | Implemented | Unit-tested against a fake Windows API only. `agent/tools/vm_test_enforcement.ps1` is written and has not been run |
 | ATT&CK retrieval, prompt template and technique-ID validator | Implemented | Unit-tested. The tests that use the downloaded ATT&CK data run after the fetch and index commands |
 | Replay pipeline (detection, policy, report stub) and backend API | Implemented | Run over recordings in WSL. The API records an analyst's approval or rejection, and nothing acts on it |
 | Dashboard (alerts, decisions, FIM changes, stats) | Implemented | Tests in WSL. The pages read replayed sessions |
@@ -65,7 +65,7 @@ Everything above is the full design, and the design text stays as it is. The cur
 
 **Future work.**
 - **Batch 9 (T1685)** and the further batches (7, 8, 10 and 11). They are not recorded, so T1685 has no run.
-- **The FIM evidence session.** It is built, unit-tested and ready to run on the branch `track-a/fim-session`, with its own pool, `fim-test-only`, which is kept out of training and evaluation. It has not been run in the VM.
+- **The FIM evidence session.** It is built, unit-tested and merged, with its own pool, `fim-test-only`, which is kept out of training and evaluation. It has not been run in the VM.
 - **The T1105 diagnostic** (below).
 - **The approve and reject flow.** The API and the dashboard record the analyst's decision. Connecting an approval to an action (`policy.execute` for an approved request, and the FIM approval that updates the baseline) is not built, and needs API authentication first.
 - **The EMBER static model.**
@@ -145,7 +145,7 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 
   Never copy executables, scripts, archives or memory dumps out of the VM.
 - **EICAR:** the repo stores only its hash and YARA rule, never the file itself. Create the EICAR file only inside the VM. On the host, use a harmless test-marker file instead (a plain text file containing `THREATPULSE-TEST-MARKER`). Never add Defender exclusions on the host.
-- Defender inside the VM may block some Atomic tests. An exclusion for the Atomic folder **inside the VM** is fine.
+- Defender inside the VM may block some Atomic tests. An exclusion for the Atomic folder **inside the VM** is fine. The file-layer checks in `detection/VM_TEST_PLAN.md` also use an exclusion for `C:\ThreatPulseLab\scan-test`, inside the VM only. Rolling back the snapshot removes it.
 - **Credentials inside the VM are low-privilege only:** a read-only Git token or deploy key, and a free-tier LLM API key used only for this project.
 
 ### 3.3 Protecting the host from our own code and tools
@@ -175,6 +175,9 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 ```
 
 - **Why a JSONL file between the agent and the pipeline?** It is the simplest possible interface. The agent can be tested alone (just check the file), and the pipeline can be tested with sample files before the agent exists. This is what lets the team work in parallel.
+- **When a report is written.** A report is written when `risk_score >= 0.80` or the severity is Confirmed (a signature match, a FIM change in a protected zone, or `R-T1486-002`). A null score does not count, and neither does `static_analysis`.
+- **The orchestrator** is `backend/pipeline/`. It is the only part of `backend/` that imports `policy/`. The API modules do not, and `policy/` never imports `backend/`. Tests check both (`tests/test_pipeline.py`, `tests/test_policy_isolation.py`).
+- **The scorer is label-free.** `score_process` takes a process tree's events and nothing else. It never reads labels, `session.json`, the harness, names, paths or command lines (`triage/README.md`, "Scoring scope").
 - **FIM** belongs to the agent track. It's a small Python module (`agent/fim/`) running in the VM that writes `fim_change` events to its own `fim.jsonl`, in the same Event format. The pipeline merges the two files by `ts`. Python is simpler than C++ for hashing files and reading registry values.
 
 ### 4.2 Sensors (what the agent collects)
@@ -204,6 +207,11 @@ Full step-by-step instructions: [docs/lab-setup.md](docs/lab-setup.md).
 - **Evaluation.** T1003.001 is reported as a documented limitation, not as a model success or failure (Section 8.1).
 - **The T1105 test parts hold no technique behaviour.** In both recorded sessions the test part is the start and stop of `cmd.exe` only, with no child process, no downloaded file and no connection to the download host. The cause is not established (Section 2.1).
 - **Free-tier LLM terms.** On the free tier the provider may use prompts to improve its products. So only triaged alerts from the lab VM are ever sent to the LLM, never raw event streams or personal data (CLAUDE.md design rule 4), and the telemetry in them comes from the lab VM's simulated activity. Running Ollama locally keeps the prompts on the lab workstation.
+- **Short-lived processes often have no command line.** In the benign sessions of batch 1, 2 of 94 and 10 of 59 process starts had a null command line, and up to 8 of 21 did in a test session. A rule that needs a command line cannot fire on those.
+- **A file event can have no path.** In the two benign sessions of batch 1, 22,663 and 7,089 file events in `events.jsonl` had no path. Zone rules and features cannot place those events.
+- **Tiny trees look alike.** Tiny benign trees (2 to 15 events) look like the tiny attack trees (T1053.005 and T1547.001 have 12 to 14 events), so the model has little to separate them by.
+- **Replayed scores are pessimistic.** A replayed lab recording is scored with the harness inside the tree and with sensor start-up events, which training left out. That is a harder case than a real endpoint.
+- **The entropy check has gaps.** Ransomware with low-entropy output, a forged matching file header, partial encryption, or a delete-only wiper stays at `R-T1486-001`, which is alert-only. Files an extractor deletes before they are read stay "unknown". Files are read only live or in the VM, so a replay outside the VM always gives "unknown".
 - Persistence protection is **detect-and-revert**, not block. The process that wrote the key has often already exited, so there may be nothing left to suspend.
 - Our own ransomware detector suspends after a burst of encryptions, so a few files may be lost first. We measure this ("files lost before containment") as a metric, as ShieldFS-style evaluations do.
 
@@ -259,6 +267,7 @@ The schema is `contracts/schemas/event.schema.json`.
 - `network_connect` is an outbound connection. ETW events are TCP only, while Sysmon Event ID 3 covers only what the Sysmon config includes.
 - `fim_change` says an item in the persistence zone differs from its last known state. `target.registry_key` or `target.path` names the item, and `target.change` is required: `{"kind": "added | modified | removed", "old_value": …, "new_value": …}`. Registry items give the data, cut to 1024 characters, and files give the SHA-256. `target.change` is null or absent for every other event type.
 - FIM doesn't know who made a change, so `fim_change` has `pid` 0 and `process.image` `"unknown"`.
+- `process.microsoft_root` is optional. It is true only when the signature verified and the certificate chain ends at a Microsoft root, checked by the agent and never taken from the signer text. Absent means unknown, which is not the same as false. Recordings made before it existed lack it.
 - FIM's `event_id` counter starts at 900000000, so IDs in `fim.jsonl` can't clash with those in `events.jsonl`.
 - One action can appear twice, once per `source`. See "Event sources for ML" in Section 10.
 - `events.jsonl` is not strictly in time order, because ETW and Sysmon arrive on separate threads. Consumers must sort by `ts`, which also merges `fim.jsonl` in.
@@ -269,7 +278,7 @@ The Alert carries every attribute the policy engine needs, so the engine never h
 
 ```json
 {
-  "alert_id": "a-0042",
+  "alert_id": "a-20261104T115500-000042",
   "ts": "2026-11-04T12:00:05Z",
   "layer": "signature | heuristic | fim | rule | ml",
   "rule_id": "R-T1547-001",
@@ -281,6 +290,7 @@ The Alert carries every attribute the policy engine needs, so the engine never h
     "image": "C:\\Windows\\System32\\reg.exe",
     "signed": true,
     "signer": "Microsoft Windows",
+    "microsoft_root": true,
     "trusted_path": true,
     "ancestors": [
       { "pid": 4300, "image": "C:\\Windows\\System32\\cmd.exe" },
@@ -298,8 +308,13 @@ The Alert carries every attribute the policy engine needs, so the engine never h
 }
 ```
 
+- `alert_id` is `a-<run start UTC, yyyymmddThhmmss>-<counter>`, the same format as `event_id`. IDs must stay unique across runs, because the backend keys analyst reviews on them, so a reused ID would hand a new decision an old approval.
+- `subject.microsoft_root` is optional and copied from the Event by detection. Absent means unknown.
+- `static_analysis` is optional and holds what file analysis found, for example `"static_analysis": { "score": 0.65, "reasons": ["…"] }`. `score` is 0 to 1, and null for a signature match, which is a fact and not a score. `reasons` lists every finding, or every method that matched a signature. The policy engine ignores it, and it never feeds `risk_score` rules. Reasons are telemetry.
+- `event_type` also allows `file_scan` (Alert only, not Event): a scan with no triggering event.
 - `risk_score` is the ML score of the subject's process tree, filled in by `score_process`. It is nullable: null means not scored, and policy rules treat null as not matching `risk_score_gte`.
-- `rule_id` is `ML-TRIAGE` for `ml` alerts and `SIG-<name>` for `signature` alerts.
+- `rule_id` is `ML-TRIAGE` for `ml` alerts, `SIG-<name>` for `signature` alerts and `HEUR-<name>` for `heuristic` alerts.
+- One alert per signature name. A file matched by both the hash list and YARA gives one alert, and its reasons list both methods.
 - An alert with no known process, such as a FIM change with no writer or a file scan, has `subject.pid` 0, `image` `"unknown"`, `signed` false, `signer` null, `trusted_path` false, no `ancestors`, and `risk_score` null. `evidence_event_ids` may be empty only then.
 - `object.access` lists decoded rights such as `vm_read` (from the Sysmon access mask).
 
@@ -309,23 +324,26 @@ A decision can contain **several actions**, each with its own status.
 
 ```json
 {
-  "decision_id": "d-0042",
-  "alert_id": "a-0042",
+  "decision_id": "d-20261104T115500-000042",
+  "alert_id": "a-20261104T115500-000042",
   "ts": "2026-11-04T12:00:06Z",
   "policy_rules": ["P2-persistence-change", "P2b-persistence-origin"],
   "actions": [
-    { "action": "restore", "automatic": true, "status": "executed", "executed_at": "2026-11-04T12:00:06Z" },
-    { "action": "suspend", "automatic": true, "status": "skipped", "reason": "process already exited", "executed_at": null }
+    { "action": "restore", "automatic": true, "status": "pending", "executed_at": null },
+    { "action": "suspend", "automatic": true, "status": "pending", "target": { "pid": 4321, "image": "C:\\Windows\\System32\\reg.exe" }, "executed_at": null }
   ],
   "attributes": { "zone": "persistence", "signed": true, "trusted_path": true, "risk_score": 0.91 }
 }
 ```
 
 - Allowed actions: `alert_only`, `suspend`, `block_network`, `restore`, `request_kill`, `request_delete`.
-- Allowed statuses: `executed`, `failed`, `skipped`, `awaiting_approval`, `approved`, `rejected`.
+- Allowed statuses: `pending`, `executed`, `failed`, `skipped`, `awaiting_approval`, `approved`, `rejected`.
+- `pending` is a planned automatic action, with `executed_at` null. `policy.decide` plans and `policy.execute` runs, so the example above shows a decision before `execute`.
+- `target` is optional and names the process an action is aimed at, `{pid, image}`. It is set for `suspend`, `block_network` and `request_kill`. The engine checks the never-suspend list against it, and the executor acts on it.
+- A decision keeps its alert's suffix: `d-<run start>-<counter>`.
 - `ts` is when the decision was made. Each action's `executed_at` is when it ran, and is null if it has not run.
-- `request_kill` and `request_delete` are always `automatic: false` and start as `awaiting_approval`. They gain `reviewed_by` and `reviewed_at`, set on approve or reject.
-- Automatic actions use only `executed`, `failed` and `skipped`.
+- `request_kill` and `request_delete` are always `automatic: false` and start as `awaiting_approval`. `reviewed_by` and `reviewed_at` are required once a request action is approved, rejected, executed or failed, and stay after it runs, so a completed kill still records who approved it. They are forbidden on `awaiting_approval` and on automatic actions.
+- Automatic actions use only `pending`, `executed`, `failed` and `skipped`.
 - `reason` is required on `skipped` and `failed`.
 - `policy_rules` may be empty, when only the default applied.
 
@@ -333,14 +351,16 @@ A decision can contain **several actions**, each with its own status.
 
 ```json
 {
-  "report_id": "r-0042",
-  "alert_id": "a-0042",
+  "report_id": "r-20261104T115500-000042",
+  "alert_id": "a-20261104T115500-000042",
   "summary": "Plain-language description of what happened.",
   "techniques": [{ "id": "T1547.001", "name": "Registry Run Keys / Startup Folder", "evidence": "…" }],
   "timeline": ["12:00:01 powershell.exe started cmd.exe", "…"],
   "validated": true
 }
 ```
+
+A report keeps its alert's suffix: `r-<run start>-<counter>`. `techniques` can be empty, for example for EICAR.
 
 ### 5.5 Backend API (backend → dashboard)
 
@@ -358,37 +378,58 @@ A decision can contain **several actions**, each with its own status.
 
 - In `/fim/changes/{id}/approve`, `{id}` is the `event_id` of the `fim_change` event.
 - `/decisions/{id}/approve` and `/decisions/{id}/reject` take the body `{"reviewed_by": "…", "action": "…"}`, per action, because one decision can hold several actions.
-- API response schemas live in `contracts/schemas/api/`.
+- API response schemas live in `contracts/schemas/api/`. `/stats` has one too, and `actions_by_status` includes `pending`. The FIM item schema is `fim_change.schema.json`.
 
 ### 5.6 Policy rules file (`rules/policy.yaml`)
 
 ```yaml
+# ThreatPulse policy rules (PLANNING.md Section 5.6), read by policy.decide.
+# Every key is required, and an unknown key stops startup (policy/loader.py).
+
 thresholds:
   auto_contain: 0.80     # suspend / block network
   request_kill: 0.95     # ask the analyst to approve killing a suspended process
-  alert: 0.50
+  alert: 0.50            # dashboard severity only. No rule reads it: the default is alert_only
 
+# How long a FIM change must stay different from the baseline before it is restored,
+# so a short remove-and-re-add such as Edge's autolaunch Run value is not fought over.
+fim_debounce_seconds: 2
+
+# Folders whose programs count as trusted_path. Detection computes that attribute with
+# the same list (detection/zones.py). A test keeps the two in step.
 trusted_dirs:
   - 'C:\Windows\System32\'
   - 'C:\Program Files\'
   - 'C:\Program Files (x86)\'
 
-# Never suspended, whatever happens.
-# Matched by FULL PATH + valid Microsoft signature, never by name alone
+# Never suspended, never blocked, never offered for kill, whatever the risk score.
+# Matched by FULL PATH plus a verified Microsoft signature, never by name alone
 # (malware can be named svchost.exe and placed on the Desktop).
+# `signature: microsoft` is the default. The agent sets process.microsoft_root only when
+# the signature verified and the chain ends at a Microsoft root, and the signer text is
+# never used. `*` stands for one whole folder name.
 never_suspend:
-  - 'C:\Windows\System32\smss.exe'
-  - 'C:\Windows\System32\csrss.exe'
-  - 'C:\Windows\System32\wininit.exe'
-  - 'C:\Windows\System32\winlogon.exe'
-  - 'C:\Windows\System32\services.exe'
-  - 'C:\Windows\System32\lsass.exe'
-  - 'C:\Windows\System32\svchost.exe'
-  - 'C:\Windows\explorer.exe'
-  # also: System (PID 4), Defender (MsMpEng.exe), Sysmon, and our own agent/pipeline processes
+  - { system: true }                                    # System, pid 4
+  - { path: 'C:\Windows\System32\smss.exe' }
+  - { path: 'C:\Windows\System32\csrss.exe' }
+  - { path: 'C:\Windows\System32\wininit.exe' }
+  - { path: 'C:\Windows\System32\winlogon.exe' }
+  - { path: 'C:\Windows\System32\services.exe' }
+  - { path: 'C:\Windows\System32\lsass.exe' }
+  - { path: 'C:\Windows\System32\svchost.exe' }
+  - { path: 'C:\Windows\explorer.exe' }
+  - { path: 'C:\ProgramData\Microsoft\Windows Defender\Platform\*\MsMpEng.exe' }
+  - { path: 'C:\Windows\Sysmon64.exe' }
+  # Our own programs are not Microsoft-signed, so each is listed by its exact path with
+  # `signature: none`. Not the whole C:\ThreatPulseLab\ tree. An administrator can replace
+  # these exact files (policy/README.md). Track A confirms the paths on the VM.
+  - { path: 'C:\ThreatPulseLab\threatpulse\agent\build\Release\threatpulse_agent.exe', signature: none }
+  - { path: 'C:\ThreatPulseLab\threatpulse\agent\.venv\Scripts\python.exe', signature: none }
 
 lsass_mode: learning     # learning = alert_only; enforcing = suspend
-lsass_allowlist: []      # filled from benign recordings before switching to enforcing
+# Filled from benign recordings before switching to enforcing. Same entry format as
+# never_suspend. A process whose microsoft_root is unknown is NOT allowlisted.
+lsass_allowlist: []
 
 rules:
   - id: P1-lsass-read
@@ -397,22 +438,31 @@ rules:
 
   - id: P2-persistence-change
     when: { zone: persistence, change_approved: false }
-    actions: [restore]           # restore every unapproved change, whoever made it
+    actions: [restore]           # every unapproved change, whoever made it, once it has settled
 
   - id: P2b-persistence-origin
-    when: { zone: persistence, risk_score_gte: 0.80 }
+    when: { zone: persistence, risk_score_gte: auto_contain }
     actions: [suspend]           # highest-risk live process in the writer's tree; skipped if all exited
 
   - id: P3-ransomware
-    when: { zone: documents, risk_score_gte: 0.80 }
+    when: { zone: documents, risk_score_gte: auto_contain }
+    actions: [suspend]
+
+  # Burst of deletes AND the process wrote encrypted-looking files (detection/ransom.py).
+  # A fact about behaviour, so it does not wait for a risk score. R-T1486-001, the burst
+  # alone, stays alert_only: an archiver can look the same. Authorised by the repository
+  # lead. Never-suspend still applies. Ransomware whose output is low-entropy or mimics a
+  # file header is not seen by this rule (detection/README.md).
+  - id: P3b-ransomware-entropy
+    when: { zone: documents, rule_id: R-T1486-002 }
     actions: [suspend]
 
   - id: P4-exfil
-    when: { event_type: network_connect, risk_score_gte: 0.80 }
+    when: { event_type: network_connect, risk_score_gte: auto_contain }
     actions: [block_network]
 
   - id: P5-kill-request
-    when: { already_suspended: true, risk_score_gte: 0.95 }
+    when: { already_suspended: true, risk_score_gte: request_kill }
     actions: [request_kill]      # waits for analyst approval
 
   - id: P6-delete-request
@@ -422,13 +472,23 @@ rules:
 default: [alert_only]
 ```
 
+The block above is the shipped file. What it adds to the design:
+- `risk_score_gte` takes a threshold name (`auto_contain`, `request_kill`), not a number. `thresholds.alert` is a dashboard threshold only: no rule reads it.
+- `fim_debounce_seconds` is how long a FIM change must stay different from the baseline before P2 restores it.
+- `never_suspend` entries are `{path, signature}`, and `signature` defaults to `microsoft`. `{system: true}` is the System process, and `*` stands for one whole folder name. Our own programs are listed by exact path with `signature: none`, not as the whole `C:\ThreatPulseLab\` tree. A listed path whose `microsoft_root` is unknown counts as protected, and only an explicit `false` means it is not exempt. The list also covers `block_network` and `request_kill`.
+- `P3b-ransomware-entropy` needs no risk score. `R-T1486-001` alone, the delete burst, stays `alert_only`, because an archiver can look the same. The earlier idea of a detector on write rate plus entropy is built as the burst (`R-T1486-001`) plus a verdict on the entropy of the files written (`detection/ransom.py`). `R-T1486-002` is a rule ID raised by the pipeline and not by the rule engine, because it needs to read files. The rule loader gained the `rule_id` condition for it, and the change to `rules/policy.yaml` was authorised by the repository lead.
+- The 0.80 threshold was set before any model existed, and class weights shift the model's scores. The threshold rule in Section 10 proposes 0.5 for the saved model, which is in-sample for the choice, and nothing applies it. The policy keeps 0.80 until more batches exist.
+
 **Why the persistence rule doesn't trust the writer.** Atomic T1547.001, like real attackers, writes Run keys using `reg.exe` or PowerShell. Both are signed and live in System32, so "who wrote it" says almost nothing.
 
 Instead we protect the **object**, which is classic integrity checking:
 - Every change that isn't approved is restored.
 - When a legitimate installer adds a Run key, the change appears on the dashboard, the analyst approves it, the baseline updates, and the restored change is re-applied.
 - Restore acts only on a change that still differs from the baseline after a short debounce (about 2 seconds), so a harmless rewrite such as Edge's Run value is logged but not fought over.
-- Suspension depends on the **risk score** of the process tree, and is skipped if those processes have already exited.
+- Suspension depends on the **risk score** of the process tree, and is skipped if those processes have already exited. A FIM alert has no process and a null score, so P2b tests the best score in the `writer_tree` that the caller passes. Null scores never match.
+- The caller supplies the debounce fact (`context["fim"]`), because the engine does not read the clock or the baseline. The orchestrator supplies it after the wait.
+- The writer is found by linking the change to the nearest write to the same item, from 120 seconds before to 0.5 seconds after, and the tree is that writer plus its parents (the same rule as `triage/features.py`).
+- In a replay, the baseline is rebuilt from `fim.jsonl`: an item's baseline is what its first reported change replaced. This is an approximation, because the VM's `baseline.json` is not exported, and it is wrong for an item changed before recording began.
 
 **Why LSASS uses an allowlist and starts in learning mode.**
 - Signed Windows binaries can be abused. For example, `rundll32.exe` (signed, in System32) can dump LSASS memory through `comsvcs.dll`, so trust alone isn't enough.
@@ -481,7 +541,7 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
 - [ ] Each behaviour rule fires on its Atomic test and **not** on the benign sessions (or the false positives are documented)
 - [ ] A retrieval query like "process reads LSASS memory" returns T1003.001 in the top results
 
-**Release scope (Section 2.1):** the first item means batches 1 to 6 recorded and exported (46 sessions). T1053.005 and T1218.011 have 3 runs each, and T1685 was not recorded. The hosts-file FIM alert is verified by `vm_test_fim.ps1` and is not yet in a recorded session: the FIM evidence session is ready on the branch `track-a/fim-session` and is future work. Step 2.9, the EMBER static model, is future work.
+**Release scope (Section 2.1):** the first item means batches 1 to 6 recorded and exported (46 sessions). T1053.005 and T1218.011 have 3 runs each, and T1685 was not recorded. The hosts-file FIM alert is verified by `vm_test_fim.ps1` and is not yet in a recorded session: the FIM evidence session is built and merged, and running it is future work. Step 2.9, the EMBER static model, is future work.
 
 ### Phase 3: ML triage, policy engine and AI reports (4th gen)
 
@@ -534,6 +594,7 @@ Each phase ends with a **gate**: a short checklist that must pass before the nex
 | 8 | Access control needs a formal model | Policy written as subject/object/environment attributes in a YAML file. Every decision logs the rules and attributes used | NIST SP 800-162 |
 | 9 | Enforcement could crash the VM or touch the host | Never-suspend list (path + signature), VM guard marker file, undo for every action | Section 3.3, 5.6 |
 | 10 | Results could be cherry-picked | Test list and held-out techniques fixed in Phase 0, before building | Arp et al. 2022 |
+| 11 | Administrators can replace the exact files of our own never-suspend entries (the agent and the FIM Python) | Accepted. The entries are exact paths with `signature: none`, not a whole folder | `policy/README.md` |
 
 ## 8. Evaluation plan
 
@@ -559,6 +620,7 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 - **Never run T1685 tests #14 or #15.** They unload and uninstall Sysmon, which would blind our own sensors.
 - **The FIM evidence session has its own pool, `fim-test-only`, which is never used to train or evaluate the model.** It records what FIM reports when the hosts file and a Startup folder change, together with the Run, RunOnce and RunOnceEx values that `vm_test_fim.ps1` also changes. It is a script that changes persistence items, not an attack technique, and its Run-key writes look like T1547.001, so a model that saw it would learn the script. It is kept out in four ways: the pool is `fim-test-only` in `session.json` and `labels.csv`, `excluded_from_ml_pools` in `agent/config/recording_tests.json` lists it, it is recorded outside the batch plan (batch 0), and its export goes in a folder of its own and not in a batch folder. Track B's training loader and rule evaluation skip the pool: both read `excluded_from_ml_pools` from `agent/config/recording_tests.json` and stop if the file or the key is missing, so the key must be on `main` before their code is. The separate export folder is a second safeguard. The labeller marks its test tree `malicious`, with an empty technique. Its results are reported with the FIM layer and the rule layer (Section 8.3), and are not counted in any per-technique or model result.
 - **T1003.001 is reported as a documented limitation, not as a model success or failure.** With LSA protection on, Windows denies the dump and the sensors record no access to LSASS (Section 4.3). In 4 of the 5 recorded sessions the test part is 2 events, PowerShell's start and stop, and in the fifth it is 56 events of normal PowerShell start-up, so there is no behaviour of the attack for the model to learn or miss, and the only layer that fires is the command-line rule `R-T1003-002`, in 4 of the 5 sessions. The evaluation table lists T1003.001 separately, with this explanation, and says which layer caught it and in how many sessions.
+- **The held-out rules see only the launcher's part.** `R-T1053-001` sees the part that creates the task, which later runs under the Task Scheduler service outside the launcher's tree, and `R-T1218-001` matches a process started by `rundll32.exe`. The held-out results describe that part.
 - **T1105 is reported as a documented limitation in the same way.** In both recorded sessions (batch 6, NAT) the test part is 2 events, the start and stop of `cmd.exe`: no process started under it, no event names the downloaded file, and no connection to the download host is recorded. The cause is not established, and a Defender block is consistent with the data. It is listed apart in the evaluation table, with the counts and the layer that caught it, if any.
 
 ### 8.2 Protected-zone demos
@@ -578,7 +640,7 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 |---|---|
 | Detection per technique | Caught yes/no, and which layer caught it |
 | False positives | Alerts during benign sessions (1–2 hours of normal use) |
-| ML quality | Precision, recall, false-positive rate with leave-one-batch-out (every session from one boot stays on one side), per technique, including the held-out ones |
+| ML quality | Precision, recall, false-positive rate with leave-one-batch-out (every session from one boot stays on one side), per technique, including the held-out ones. Results are per process tree, as counts with Wilson 95% intervals, at 0.50 and 0.80, and the skew between alert-time (partial-tree) and complete-tree scores is reported next to them |
 | Rule-layer results | For each behaviour rule, whether it fires on its Atomic sessions and on the benign sessions, with the false positives counted |
 | Latency | Time from event to alert, and from alert to enforcement |
 | LLM filtering | % of events/alerts that reach the LLM (shows triage works) |
@@ -603,7 +665,7 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 - **Ordinary attacks.** 21 trees. The one miss at 0.80 is the T1486 tree of batch 2 (complete model 0.21, snapshots model 0.71). Batch 2 was the weakest fold in every earlier run too.
 - **Benign trees.** 661 across the six test folds. In batch 6 the complete model flags 5 of 122 (4.1%, 95% CI 1.8% to 9.2%), all in the install-uninstall session, and the snapshots model flags 1 of 122.
 - **Held-out.** The snapshots model's `T1218.011` scores are 0.79, 0.50 and 0.64, just under the line, so this is a threshold effect on three trees. `T1053.005` is caught every time.
-- **T1003.001 and T1105** are listed apart because the recorded test parts hold no technique behaviour: 0 of 5 and 0 of 2 are flagged at 0.50 or 0.80. For T1105 the cause of the empty test part is not established (Section 2.1).
+- **T1003.001 and T1105** are listed apart because the recorded test parts hold no technique behaviour: 0 of 5 and 0 of 2 are flagged at 0.50 or 0.80. Detecting T1003.001 is a job for the rule layer (`R-T1003-002`), and the model's scores on its near-empty trees are not detections. For T1105 the cause of the empty test part is not established (Section 2.1).
 - **Alert time.** The replayed tree still holds the wrapper that runs each test, which training left out, and the drop was not investigated. The policy keeps 0.80, and `--use-model` stays off.
 - **The `windows-update` session is an outlier that was not ablated.** One tree of 741,055 events, against 77,472 for the largest tree among the other four biggest contributors. It was not replayed at alert time (a session over 400,000 events is not replayed). In the fold that tests batch 6 that tree is not among the highest-scoring benign trees. No run left the session out, so this is its share of the rows and one fold, not a controlled test.
 
@@ -615,7 +677,7 @@ Confirmed list (PHASES.md step 0.10), checked against Atomic Red Team commit `ed
 | T1003.001 | 4 of 5 (80%, 95% CI 37.6% to 96.4%), all by `R-T1003-002`. `R-T1003-001` (an LSASS read) fired in 0 of 5 |
 | T1105 | 0 of 2. `R-T1105-001` has not been tested, because the test part holds no connection and no file write |
 | Benign sessions with any alert | 5 of 12 (41.7%, 95% CI 19.3% to 68%), and 2 of 4 in batches 5 and 6 |
-| `R-T1486-001` on zip extraction | 3 of 3 zip-extraction sessions (batches 2, 3 and 5). No count or window separates it from the attack script. The entropy rule `R-T1486-002` is meant to address this and can only be checked in the VM |
+| `R-T1486-001` on zip extraction | 3 of 3 zip-extraction sessions (batches 2, 3 and 5). No count or window separates it from the attack script. The entropy rule `R-T1486-002` is meant to address this. It handles the case only if the files are read in the VM, and it is not verified on real data from WSL |
 | Edge autolaunch Run value | `R-FIM-PERSISTENCE` and `R-T1547-001` fired in 2 of 12 benign sessions. In the normal-use session of batch 5 the cause is Edge rewriting its autolaunch Run value |
 | No evidence yet | `R-T1685-001` (no T1685 session), `R-FIM-HOSTS` (no hosts-file change) and `R-T1547-002` (0 of 11: no recorded test uses a Startup folder) |
 
@@ -642,6 +704,9 @@ The attack tests are the same scripts run again in every batch, so these results
 | FIM doesn't watch `RunOnceEx`, and Atomic T1547.001 #2 writes there. ETW and Sysmon saw it, FIM didn't | Decided (Section 10, "FIM and RunOnceEx"): FIM now watches it as a subtree, which needs the new snapshot `atomic-ready-3`. T1547.001 #2 run 1 is recorded again as an extra run |
 | Benign sessions contain legitimate `fim_change` events: in batch 1, Edge removed and re-added its `MicrosoftEdgeAutoLaunch_*` Run value 140 ms apart. A rule on `fim_change` would fire, and a restore could race with Edge | Decided (Section 10, "FIM restore debounce"): FIM keeps logging every change, and the Phase 3 restore waits about 2 seconds. Still a Gate 2 false positive for any rule that fires on `fim_change` alone |
 | The agent's path coverage for processes started after it was under 95% in all 9 batch 1 sessions (68.8% to 94.5%), and the attack processes had 2 or 3 pathless writes each, which misses the 100% target. The sessions start right after a revert, when Windows background work is highest. The pathless writes are PowerShell's jump-list writes, not in a protected zone | Decided (Section 10, "Warm-up and path coverage"): a 60-second warm-up from batch 2, and the jump-list writes are accepted. Batch 2 showed the warm-up does not raise coverage (91% to 94% in the attack sessions in both batches), so it is kept only for consistency |
+| ATT&CK revokes IDs between releases, as it did with T1562.001 -> T1685 | ATT&CK is pinned by hash. A version bump reruns the test that every technique ID this project uses is still active |
+| Behaviour rule thresholds are starting guesses and were never tuned (10 deletes or renames in 30 seconds for T1486, connect then write within 30 seconds for T1105). `R-T1486-001` fires on every zip-extraction session recorded | Each rule is checked against the benign sessions and its false positives are documented (Section 8.3). Thresholds are not tuned on the evaluated sessions: a test fails if a rule file is edited. `R-T1486-002` adds the entropy check, which can only be verified in the VM |
+| A recorded session can be very large: the Windows Update session is 843.8 MB and 1,180,365 events | Loading is streamed (peak 1.8 GB for a six-batch training run and 367 MB for the rule evaluation). The pipeline replay still holds a whole session, so a session over 400,000 events is not replayed for the alert-time view |
 
 ## 10. Decisions
 
@@ -682,13 +747,35 @@ The attack tests are the same scripts run again in every batch, so these results
 | Lab environment | One lab VM on Track A's workstation. Tracks B and C develop in WSL only |
 | Scope | The design covers the C++ ETW agent, all four generations, all layers and all four zones. **The current release is the subset in Section 2.1:** all four generations with generation 2 resting on `pefile` heuristics and FIM, the dataset of batches 1 to 6, the verification, dashboard replay and evaluation listed there. Future work: batch 9 (T1685) and further batches, the FIM evidence session, the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer, backend API authentication, a full live end-to-end integration and an LSASS demonstration |
 | Release scope | See Section 2.1 for the full list and the status of each part. Dataset: batches 1 to 6, 46 sessions, batch 6 the NAT batch, T1685 not recorded. Verification still to run in the VM: EICAR and UPX, entropy, enforcement test, zone demos for ransomware and persistence. Reports: the technique-ID validator and the prompt template are implemented, and `write_report` is a stub. Dashboard: a demo from replayed sessions. Evaluation: leave-one-batch-out, per-technique table (two held-out techniques), false-positive rate, rule-layer results, latency, limitations with counts. T1003.001 and T1105 are documented limitations |
+| Vector DB | ChromaDB, stored locally in `data/attack/chroma` |
+| RAG framework | None. LangChain isn't used: retrieval and a prompt template don't need it, and leaving it out keeps "no tools" easy to verify |
+| ATT&CK data | Enterprise v20.1, SHA-256 `539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5`, 706 active techniques |
+| Embedding model | all-MiniLM-L6-v2 through onnxruntime, SHA-256 `913d7300ceae3b2dbc2c50d1de4baacab4be7b9380491c27fab7418616a16ec3`, local and CPU only |
+| Retrieval scope | All 706 techniques are indexed. Search covers the Windows ones by default, and can be switched |
+| Static heuristics | Alert at a score of 0.50 or more. Files over 64 MiB get the hash check only. Weights are hand-set, and the false-positive rate is unmeasured |
+| Alert IDs | `a-<run start UTC>-<counter>`, matching event IDs. Decision and report IDs keep the alert's suffix |
+| Report rule | `risk_score >= 0.80` or severity Confirmed. `R-T1486-002` counts as Confirmed |
+| Process tree | A root is a process whose parent has no `process_start` in the session. The label and `root_pid` never decide it. Processes already running when recording began are written with `observed_start` 0, and training uses only trees whose start was observed |
+| Behaviour rules | Sigma-style YAML, one file per technique, plain text matching with no regular expressions, one alert per process and key. Thresholds are starting guesses: 10 deletes or renames in 30 seconds (T1486), connect then file write within 30 seconds (T1105) |
+| Rule engine | `match_rules(event)` keeps state, so events must be replayed in time order. `detection/replay.py` does this |
+| Rule provenance | All rules were written in one commit before any replay, from the design. No rule file has changed since (a test checks this). The only change after data is the engine's case-insensitive de-duplication, made after batch 1. Batch 1 is in-sample for `R-T1547-001`, `R-T1547-002` and `R-T1685-001`. Batches 1 and 2 were seen for the other rules, batches 3 and 4 were evaluated once before the final run, and batches 5 and 6 were not seen before it |
+| FIM link | A `fim_change` is linked to the nearest write to the same item, up to 120 seconds before or 0.5 seconds after, because FIM and Sysmon use different clocks |
+| Ransomware entropy | A suspect file has entropy of 7.5 bits per byte or more and no matching file header. Verdict high: at least 5 sampled files and at least 80% suspect (low: at most 20%). Only high raises `R-T1486-002`. These are starting guesses and are unmeasured |
+| Entropy reads | Documents zone only, regular files only, no links, files from 512 bytes to 64 MiB, at most 100 files and 16 MiB per 10 seconds. Live or in the VM only: a replay outside the VM always gives "unknown" |
+| Triage model | XGBoost, depth 3, 60 rounds, fixed in advance. Class weight negatives over positives. Scores are uncalibrated |
+| Training set | Test-part trees are positive. Attack-session background trees and benign trees are negative. Events before `start_utc` are dropped. Only trees with an observed start are used |
+| Training rows | Snapshots of each tree after 10, 25, 50, 75 and 100% of its time span. A partial snapshot needs 2 events. The whole tree is always kept, and a snapshot keeps its tree's label |
+| Split | By whole batch. Held-out techniques (T1053.005 and T1218.011) are evaluation only, and a held-out session is kept out of training whole. T1685 is not recorded |
+| Evaluation | Leave-one-batch-out. A threshold is only ever chosen from training folds: inside the training batches, the lowest value from 0.5 to 0.95 whose pooled false-positive rate is at most 2%. The rule needs at least 3 training batches |
+| Limited techniques | T1003.001 and T1105, by technique and never by size. The test part holds only the launcher's ordinary behaviour, however many events it has. Their trees are left out of training (a command-line option puts them back), left out of recall, and reported apart with their event counts. T1105 is provisional: if a later recording shows a real download in a T1105 test part, the list has to be revisited |
+| Model file | XGBoost JSON with a SHA-256 sidecar, never pickle. The saved model is local and gitignored |
+| Pools left out of ML | `triage/dataset.py` and `detection/rule_eval.py` skip every session whose pool is in `excluded_from_ml_pools` in `agent/config/recording_tests.json` (today `fim-test-only`), for training and evaluation, and report them by name. They share one implementation, so they cannot disagree about which sessions count. The list comes from that file only. A missing file, a missing key, or an unknown pool stops the run |
 | LLM provider | **Gemini free tier.** **Local Ollama is the fallback**, if the free tier is insufficient or unavailable, and **Groq is an alternative**. The client is provider-agnostic, so the provider is one setting. Environment variables: `LLM_PROVIDER`, which takes the values `gemini`, `groq` or `ollama`, `GEMINI_API_KEY` and `GROQ_API_KEY`. They live in a gitignored `.env`, with `.env.example` as the template of empty values, and never in code, logs or commits. Only triaged alerts from the lab VM are ever sent, never raw event streams or personal data. On the free tier the provider may use prompts to improve its products (Section 4.3) |
 
 ### Open
 
 | Decision | Options | Recommendation |
 |---|---|---|
-| Vector DB | ChromaDB / FAISS | ChromaDB (simpler, stores documents with metadata) |
 | Track B and C owners | Haider Shahid / Ahmed Muaz | Assigned within the team |
 
 ## 11. References
@@ -710,4 +797,4 @@ Verify each reference with the publisher before citing it in external documents.
 13. Strom, B. E., et al. (2018). MITRE ATT&CK: Design and Philosophy. *MITRE Technical Report.*
 14. Willison, S. (2025). The lethal trifecta for AI agents. *simonwillison.net* (blog post).
 
-**Tools and data (official sources):** MITRE ATT&CK STIX data (`github.com/mitre-attack/attack-stix-data`), Atomic Red Team (Red Canary), Sysmon (Microsoft Sysinternals), `sysmon-modular` (Olaf Hartong), krabsetw (Microsoft), YARA (VirusTotal), EMBER (`github.com/elastic/ember`), EICAR test file (eicar.org), UPX (upx.github.io).
+**Tools and data (official sources):** MITRE ATT&CK STIX data, Enterprise v20.1 (`github.com/mitre-attack/attack-stix-data`), the all-MiniLM-L6-v2 embedding model (ONNX), Atomic Red Team (Red Canary), Sysmon (Microsoft Sysinternals), `sysmon-modular` (Olaf Hartong), krabsetw (Microsoft), YARA (VirusTotal), EMBER (`github.com/elastic/ember`), EICAR test file (eicar.org), UPX (upx.github.io).
