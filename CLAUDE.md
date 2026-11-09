@@ -133,7 +133,7 @@ The full list is in PLANNING.md Section 10.
 | Persistence zone | Restore unapproved changes. Suspend only by risk score |
 | Containment | Limited containment is in scope |
 | Phase order | PHASES.md is authoritative for steps. PLANNING.md for design, contracts and gates |
-| Scope | The design covers the C++ ETW agent, all layers and all zones. The current release is the subset in PLANNING.md Section 2.1. Future work: the EMBER static model, a full live end-to-end integration, backend API authentication, further batches and an LSASS demonstration |
+| Scope | The design covers the C++ ETW agent, all layers and all zones. The current release is the subset in PLANNING.md Section 2.1. Future work: batch 9 (T1685) and further batches, the FIM evidence session, the T1105 diagnostic, the approve and reject flow, the EMBER static model, the LLM report writer (`write_report` is a stub), backend API authentication, a full live end-to-end integration and an LSASS demonstration. For how to continue, see docs/handover.md |
 | Lab | One lab VM (Track A). B and C develop in WSL only |
 | LLM | Gemini free tier through a **provider-agnostic client** (switching provider is one setting, `LLM_PROVIDER`). Local Ollama is the fallback and Groq an alternative. Keys (`GEMINI_API_KEY`, `GROQ_API_KEY`) only in `.env` (gitignored, template `.env.example`), never in code, logs or commits. Only triaged alerts from the lab VM are ever sent |
 
