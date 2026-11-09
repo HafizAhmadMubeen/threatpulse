@@ -185,6 +185,7 @@ These scripts run in the VM, in a 64-bit PowerShell opened as administrator. A p
 | `tools/run_batch.ps1` | Runs one batch from `tools/batch_plan.json` in its fixed order, and pauses before each manual benign session |
 | `tools/record_session.ps1` | Records one session, and writes `session.json` |
 | `tools/vm_t1486_script.ps1` | Our harmless T1486 test, on dummy files only |
+| `tools/vm_fim_session.ps1` | The FIM evidence session (below): runs `vm_test_fim.ps1` unchanged and gives `record_session.ps1` the `-Cleanup` switch it expects. Never part of a batch |
 | `tools/demo_t1486.ps1` | A slow version of that test for the live documents-zone demo, never used for recording. It pauses 100 ms between files (`-PauseMilliseconds`), takes `-FileCount`, keeps the process alive for `-HoldSeconds` so containment can reach it, and with `-NoCleanup` leaves its dummy files in `Documents\ThreatPulseDemo`. `-Cleanup` reports how many files were locked, then removes the folder |
 | `tools/vm_benign_admin.ps1`, `tools/vm_benign_zip.ps1` | Scripted benign activities |
 | `tools/make_batch_plan.py` | Generated `batch_plan.json`, from a recorded seed |
@@ -198,6 +199,13 @@ Each session gets its own folder under `C:\ThreatPulseLab\logs\sessions\`, holdi
 After the sensors start, each session waits 10 seconds to settle and then 60 seconds to warm up (`-WarmupSeconds`), and records `warmup_seconds` and, from batch 3, `warmup_end_utc` in `session.json`. **Track B computes features from `start_utc`, the test start, so what happens during the warm-up, such as the `WmiApSrv.exe` bursts below, is not counted.** The sessions per batch come from `tools/batch_plan.json`, and `run_batch.ps1` prints the count. Only a benign activity that isn't scripted pauses for a person: batch 2 had 9 sessions and no pause. It then has to pass a clean-start check: if FIM reports a change from the baseline by then, the recording stops. If a harmless rewrite such as Edge's Run value trips it, run the batch again from that session with `-FromOrder`. The check only covers the persistence zone, not Defender's state or scheduled tasks, which is why T1685 gets a batch of its own.
 
 `pool` in `session.json` says which group of techniques a session belongs to. It isn't the train/test split, which is made later by session.
+
+**The FIM evidence session.** `vm_test_fim.ps1` already changes the hosts file and a Startup folder, but none of the recorded batches holds such a change (all 24 `fim_change` events in batches 1 to 5 are registry values). `tools/vm_fim_session.ps1` lets `record_session.ps1` record it as one short labelled session. It runs the unchanged test, and its `-Cleanup` is a safety net that removes the test's values, file and hosts line only if they are still there. The session's pool is `fim-test-only`, so it is never used to train or evaluate the model (PLANNING.md Section 8.1). Export it into a folder of its own (for example `fim-test-01`), never into a batch folder. Track B's training loader and rule evaluation skip the pool: both read `excluded_from_ml_pools` from `config/recording_tests.json` and stop if it is missing.
+
+```powershell
+# In the lab VM, host-only, as lab in a 64-bit PowerShell opened as administrator, after the batches are finished:
+.\agent\tools\record_session.ps1 -TestId fim-test -Run 1 -Network host-only
+```
 
 From batch 2, `session.json` has no byte order mark. Batch 1's files have one and no `warmup_seconds`, so read them with `encoding="utf-8-sig"`, which works for both, and treat a missing `warmup_seconds` as 0. `warmup_end_utc` and `cleanup_root_pid` are in the files from batch 3 on, and are missing from batches 1 and 2. `agent_commit` is the repository commit on the VM, not the build of the agent: all 11 batches use the one binary built before `process.microsoft_root` was added, and the VM only pulls script changes until Phase 4.
 
