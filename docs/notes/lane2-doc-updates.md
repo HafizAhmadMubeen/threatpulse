@@ -218,3 +218,38 @@ Approved by the repository lead for this task. Apply after `track-a/atomic` merg
 
 ## For the frontend
 13. The dashboard now has a `pending` action status (badge and stats count). Nothing else changed.
+
+# Added on `track-c/orchestrator` (PHASES step 3.9)
+
+Apply after `track-a/atomic` and `track-a/policy-engine` merge.
+
+## PHASES.md
+1. **Step 3.9:** done on `track-c/orchestrator` for replay: `python -m backend.pipeline <session folders> --out <dir>`. `score_process` and `write_report` are stubs, so it is not yet "end to end with the real model and LLM". Add the open parts: the real scorer (3.5) and the LLM report (3.7).
+2. **Step 3.1 note:** the orchestrator is what supplies `decide`'s context (below).
+
+## ROADMAP.md
+3. **Section 2, `score_process`:** the signature is `score_process(events: list[Event]) -> float | None`. `None` means not scored, and is what the stub returns until a model exists. It is not the same as 0.0.
+4. **Section 2, `decide` context:** the orchestrator supplies `now`, `suspended_pids`, `fim` (`differs_from_baseline`, `settled_seconds`) and `writer_tree`. In a replay `suspended_pids` is always empty.
+5. **Section 2, `write_report`:** `backend/pipeline/report_stub.py` is the stub. The real one is `backend.rag.prompt.build_messages` plus a provider client.
+6. **Section 3, Phase 4:** live use still needs a runner that feeds events as they arrive and calls `execute`. The replay pipeline is the model for it: decisions for persistence changes wait for the debounce.
+
+## PLANNING.md
+7. **Section 4.1 (data flow) or 5.6:** the orchestrator is `backend/pipeline/`. It is the only part of `backend/` that imports `policy/`. The API modules do not, and `policy/` never imports `backend/`. A test checks both.
+8. **Section 5.6 (P2), FIM baseline:** in a replay the baseline is rebuilt from `fim.jsonl`: an item's baseline is what its first reported change replaced. This is an approximation (the VM's `baseline.json` is not exported), wrong for an item changed before recording began.
+9. **Section 5.6 (P2b), `writer_tree`:** a FIM change is linked to the nearest write to the same item (120 s before to 0.5 s after), and the tree is that writer plus its parents. The same rule as `triage/features.py`.
+10. **Section 8.3 (evaluation):** the rule results on batches 1 and 2 are below.
+
+## Results on batches 1 and 2 (18 sessions, replayed read-only, nothing committed)
+
+- 25 alerts, 25 decisions, 8 reports (all 8 are stub reports for FIM changes, which count as Confirmed). Every `risk_score` is null.
+- Every attack technique except one was detected by the technique's own `test` part. **T1003.001 run 2 gave no alert:** its `test` part is one PowerShell start and stop 30 ms apart, with no command line and no LSASS access event (LSA protection). Nothing was observable for the rules to see.
+- **A new false positive, `R-T1486-001` on the benign zip session (batch 2, run 3).** PowerShell extracted an archive and deleted its files: 1,019 deletes and renames in the documents folder over 10 minutes, with a peak of 51 inside 0.1 s. The attack script does 25 in 0.08 s. **No count or window separates them**, so raising the threshold would not fix it. A delete rate is not enough: ransomware also writes new content (high entropy) in place of the originals. The planned ransomware detector (write rate and entropy, PLANNING.md Section 5.6 P3) has to supply that. Until then `R-T1486-001` fires on mass deletion by a benign extractor. This was not tuned: the session is `unassigned`.
+- Edge's autolaunch rewrite (batch 1) gives 3 alerts and **no restore**: the value is back at the baseline after the debounce.
+- A Run key that stays gives `restore` planned (pending). The cleanup that removes it afterwards gives `alert_only`, because the item is back at the baseline.
+- `RunOnceEx` in batch 1: FIM did not watch it, so `restore` is skipped (baseline unknown). In batch 2 FIM reports it and `restore` is planned.
+- A persistence write gives two decisions when the rule and FIM both report it. Both plan the same restore.
+
+## For Track A
+1. **Label the batch 2 T1486 cleanup as `harness`** if not done: batch 1 v3 has it and batch 2 v2 shows the same pattern (a `harness` alert in each T1486 session).
+2. **The benign zip session fires `R-T1486-001`.** Please keep zip and extract sessions in the benign set: they are the only data that tells the ransomware rule from an archiver.
+3. **FIM's `baseline.json` for each session** would let the replay use the real baseline instead of the approximation. Export it with the recording if it is cheap.

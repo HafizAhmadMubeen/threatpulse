@@ -32,6 +32,15 @@ def next_alert_id() -> str:
         return f"a-{RUN_START}-{next(_counter):06d}"
 
 
+def start_run(run_start: str) -> None:
+    """Replay only: use the recording's own run start, so a replay gives the same IDs every
+    time, and IDs from different recordings never meet. Live runs keep the process start."""
+    global RUN_START, _counter
+    with _counter_lock:
+        RUN_START = run_start
+        _counter = itertools.count(1)
+
+
 def now() -> str:
     moment = datetime.now(timezone.utc)
     return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"

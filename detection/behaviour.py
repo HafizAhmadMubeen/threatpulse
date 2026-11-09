@@ -444,6 +444,11 @@ class RuleEngine:
             parent = self.procs[parent].ppid
         return chain
 
+    def subject_for(self, event: dict) -> dict:
+        """The Alert subject for an event's process, as the rules would build it."""
+        with self._lock:
+            return self._subject(event)
+
     def _subject(self, event: dict) -> dict:
         pid = event["pid"]
         process = event["process"]
