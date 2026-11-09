@@ -56,6 +56,8 @@ def is_confirmed(alert: dict) -> bool:
     """Matches the dashboard's Confirmed severity: a fact, whatever the score says."""
     if alert["layer"] == "signature":
         return True
+    if alert["layer"] == "rule" and alert["rule_id"] == "R-T1486-002":
+        return True  # a delete burst plus encrypted-looking output (detection/ransom.py)
     return alert["layer"] == "fim" and alert["object"]["zone"] != "none"
 
 

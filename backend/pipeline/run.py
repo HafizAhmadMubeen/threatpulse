@@ -27,6 +27,8 @@ from contracts.validate_samples import load_validators
 from detection import alerts as alert_module
 from detection import hashes
 from detection.behaviour import RuleEngine, sort_events
+from detection.entropy import FileSampler
+from detection.ransom import BURST_RULE_ID, HIGH, RANSOM_RULE_ID, UNKNOWN, RansomJudge
 from detection.scanner import scan_file
 from detection.timeline import format_ts, read_jsonl
 from policy import decide
@@ -52,6 +54,11 @@ class SessionResult:
     skipped_events: int = 0
     rejected_by_rules: int = 0
     microsoft_root_events: int = 0
+    # Per ransomware burst (R-T1486-001), the final entropy verdict: high, low or unknown.
+    # Without a file reader (every replay outside the lab VM) all of them are unknown.
+    entropy_reader: bool = False
+    entropy_verdicts: dict = field(default_factory=dict)
+    entropy_refused: dict = field(default_factory=dict)
 
 
 def read_session(folder: Path) -> dict:
@@ -112,9 +119,25 @@ def file_scan_alerts(engine: RuleEngine, event: dict) -> list[dict]:
     return found
 
 
+REJUDGE_SECONDS = 2.0  # how often a burst process is looked at again as it writes more
+
+
+@dataclass
+class Burst:
+    """A process that tripped R-T1486-001, and whether it has been escalated yet."""
+    alert: dict
+    judged_at: float
+    verdict: str = UNKNOWN
+    escalated: bool = False
+
+
 class Replay:
-    def __init__(self, scorer, reporter, scan_files: bool):
+    def __init__(self, scorer, reporter, scan_files: bool, sampler: FileSampler | None = None):
         self.scorer, self.reporter, self.scan_files = scorer, reporter, scan_files
+        # No sampler means no file is ever opened: replay stays deterministic.
+        self.sampler = sampler
+        self.judge = RansomJudge(sampler) if sampler else None
+        self.bursts: dict[Proc, Burst] = {}
         self.validators = load_validators()
         self.policy = default_policy()
         self.engine = RuleEngine()
@@ -134,10 +157,44 @@ class Replay:
         proc = self.table.observe(event)
         self.writes.observe(event, proc)
         self.fim.observe(event)
+        if self.judge:
+            self.judge.observe(event)
         found = self.engine.process(event)
         found += self.signature_alerts(event)
+        found += self.ransom_alerts(event, found, proc, now)
         for alert in found:
             self.take(alert, proc)
+
+    def ransom_alerts(self, event: dict, found: list[dict], proc: Proc | None, now: float) -> list[dict]:
+        """R-T1486-002: a delete burst (R-T1486-001) whose process wrote encrypted-looking
+        files. Raised once per process, in addition to the burst alert, never instead of it.
+        Without a sampler every burst stays unknown and this returns nothing."""
+        if proc is None:
+            return []
+        for alert in found:
+            if alert["rule_id"] == BURST_RULE_ID and proc not in self.bursts:
+                self.bursts[proc] = Burst(alert=alert, judged_at=-float("inf"))
+        burst = self.bursts.get(proc)
+        if burst is None or burst.escalated or self.judge is None:
+            return []
+        stopping = event["event_type"] == "process_stop"
+        if now - burst.judged_at < REJUDGE_SECONDS and not stopping:
+            return []
+        burst.judged_at = now
+        verdict, evidence = self.judge.judge(proc.pid, now, settle=0.0 if stopping else 1.0)
+        burst.verdict = verdict
+        if verdict != HIGH:
+            return []
+        burst.escalated = True
+        base = burst.alert
+        escalated = {
+            **base,
+            "alert_id": alert_module.next_alert_id(),
+            "ts": event["ts"],
+            "rule_id": RANSOM_RULE_ID,
+            "evidence_event_ids": list(dict.fromkeys([*base["evidence_event_ids"], *evidence[:20]])),
+        }
+        return [alert_module.checked(escalated)]
 
     def signature_alerts(self, event: dict) -> list[dict]:
         if event["event_type"] != "process_start":
@@ -231,8 +288,11 @@ class Replay:
 
 
 def run_session(folder: Path, *, scorer=score_process, reporter=report_stub.write_report,
-                scan_files: bool = False) -> SessionResult:
-    """Replays one session folder (events.jsonl and fim.jsonl). Reads only."""
+                scan_files: bool = False, sampler: FileSampler | None = None) -> SessionResult:
+    """Replays one session folder (events.jsonl and fim.jsonl). Reads only.
+
+    `sampler` lets the ransomware check read the newly written document files. It is for
+    the lab VM, where those files exist. Without it every burst verdict is unknown."""
     validator = load_validators()["event"]
     agent, _ = read_jsonl(folder / "events.jsonl")
     fim, _ = read_jsonl(folder / "fim.jsonl")
@@ -244,7 +304,7 @@ def run_session(folder: Path, *, scorer=score_process, reporter=report_stub.writ
     result.events, result.fim_events = len(agent), len(fim)
     result.skipped_events = len(agent) + len(fim) - len(events)
     result.microsoft_root_events = sum(1 for e in events if "microsoft_root" in e["process"])
-    replay = Replay(scorer, reporter, scan_files)
+    replay = Replay(scorer, reporter, scan_files, sampler)
     replay.result = result
 
     # Alert IDs carry the recording's run start: the same every replay, and different for
@@ -254,6 +314,10 @@ def run_session(folder: Path, *, scorer=score_process, reporter=report_stub.writ
         replay.feed(event)
     replay.flush(float("inf"))
     result.rejected_by_rules = replay.engine.rejected
+    result.entropy_reader = sampler is not None
+    verdicts = [b.verdict for b in replay.bursts.values()]
+    result.entropy_verdicts = {v: verdicts.count(v) for v in ("high", "low", "unknown") if v in verdicts}
+    result.entropy_refused = dict(sampler.refused) if sampler else {}
 
     for items in (result.alerts, result.decisions, result.reports):
         items.sort(key=lambda item: item["alert_id"])

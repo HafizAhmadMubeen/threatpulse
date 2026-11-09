@@ -10,6 +10,7 @@ uv run python -m backend.pipeline /mnt/e/threatpulse-data/vm-export/batch-01 /mn
 - **Inputs are only read.** `--out` inside an input folder is refused. Real recordings must go to a gitignored folder such as `data/runs/` (the repo is public).
 - A folder with `events.jsonl` is a session. Any other folder is searched for session folders.
 - `--labels` is used for the summary only (alerts per `part`). It never reaches a decision.
+- `--read-files` samples the document files a delete burst's process wrote (see below). VM only.
 - `--scan-files` also runs `scan_file` on process images that exist on the machine. Off by default, because a recording's Windows paths don't exist in WSL. It is meant for the VM.
 
 ## What it does, per event, in time order
@@ -41,6 +42,10 @@ uv run python -m backend.pipeline /mnt/e/threatpulse-data/vm-export/batch-01 /mn
 
 - Alert, decision and report IDs carry the **recording's** run start, so a replay gives the same IDs every time and two recordings never share one. This matters because the review store is keyed on them.
 - Everything is validated against `contracts/` before it is written.
+
+## Ransomware entropy (R-T1486-002)
+
+After `match_rules`, a process that tripped `R-T1486-001` is judged by `detection/ransom.py`: do the document files it wrote look encrypted? A `high` verdict adds `R-T1486-002` (once per process, as well as the burst alert), and policy rule `P3b` plans a suspend. **Only with `--read-files`**, which opens document-zone files on this machine and so belongs in the lab VM. Without it every burst is `unknown`, `R-T1486-002` is never raised, and replay output is unchanged. The summary has an `entropy` block (reader on/off, bursts by verdict, files not read and why). Details and limits: `detection/README.md`.
 
 ## Known gaps
 

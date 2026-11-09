@@ -110,3 +110,11 @@ Roll back to `pre-scan-test`. That removes the exclusion, EICAR, UPX and the tes
 | Rolled back to `pre-scan-test` | Yes | | |
 
 If a score looks wrong, send the reasons from the output, not the files. Only `.jsonl` and `.csv` logs may leave the VM (PLANNING.md Section 3.2).
+
+## Ransomware entropy (R-T1486-002), for Track A
+
+Run inside the VM, after a recording and before the rollback, with the test files still present.
+
+1. Replay the T1486 session with `python -m backend.pipeline <session> --out data/runs/entropy --read-files`. Expect `R-T1486-001` and `R-T1486-002`, `entropy.bursts_by_verdict` `{"high": 1}`, and decision `P3b-ransomware-entropy` with `suspend` pending. If it says `unknown`, check `entropy.files_not_read`: output files under 512 bytes are skipped, so make the script write at least 512 bytes per file.
+2. Replay the benign zip/extract session the same way. Expect `R-T1486-001` only. If the extractor already deleted its files the verdict is `unknown`, which is fine but proves nothing: for a real check, replay while the extracted files exist, or run it live.
+3. Report the numbers back (sampled files, entropy range, verdict). The thresholds are guesses until then.

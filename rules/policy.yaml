@@ -63,6 +63,15 @@ rules:
     when: { zone: documents, risk_score_gte: auto_contain }
     actions: [suspend]
 
+  # Burst of deletes AND the process wrote encrypted-looking files (detection/ransom.py).
+  # A fact about behaviour, so it does not wait for a risk score. R-T1486-001, the burst
+  # alone, stays alert_only: an archiver can look the same. Authorised by the repository
+  # lead. Never-suspend still applies. Ransomware whose output is low-entropy or mimics a
+  # file header is not seen by this rule (detection/README.md).
+  - id: P3b-ransomware-entropy
+    when: { zone: documents, rule_id: R-T1486-002 }
+    actions: [suspend]
+
   - id: P4-exfil
     when: { event_type: network_connect, risk_score_gte: auto_contain }
     actions: [block_network]

@@ -143,6 +143,28 @@ Batch 1 had 7 attack sessions and 2 benign ones (one of each pool was held out: 
 - `R-T1218-001` needs rundll32's own events earlier in the stream, to know it is the parent.
 - The sample set doesn't contain these techniques, so the tests build their own events.
 
+### Ransomware: delete burst plus encrypted-looking output (R-T1486-002)
+
+`R-T1486-001` counts deletes, and an archiver extracting a zip trips it exactly like ransomware (batch 2 benign zip session: 1,019 deletes, 51 in 0.1 s, against the attack's 25 in 0.08 s). No count or window separates them. What differs is what replaces the files: encrypted bytes are near random (about 8 bits per byte) with no file header. `detection/entropy.py` and `detection/ransom.py` add that signal (3rd generation, PLANNING.md 5.6 P3 "write rate + entropy").
+
+| Verdict | Meaning | Result |
+|---|---|---|
+| `high` | at least 5 sampled files, at least 80% suspect | `R-T1486-002` is raised, in addition to `R-T1486-001`. Policy `P3b` suspends; it is also a high-risk (report) alert |
+| `low` | at least 5 sampled, at most 20% suspect | `R-T1486-001` only (alert_only) |
+| `unknown` | too few files, files gone or unreadable, a limit was hit, or no reader | `R-T1486-001` only. **Never lowers anything, nothing is suppressed** |
+
+A file is **suspect** when its sampled entropy is at least 7.5 bits per byte and it does not look like the format it claims: no known header, or a header for a different type than the extension. JPEG, DOCX and ZIP files are compressed and also score near 8, so entropy alone would flag benign extraction. Thresholds (7.5, 5 files, 80%, 20%) are **starting guesses, not measured on real data**.
+
+**Replay can't read files.** Recorded Windows paths don't exist in WSL, and the files are usually gone after a session. So in a replay without a reader every burst is `unknown` and `R-T1486-002` is never raised; the pipeline summary says so (`entropy.reader: off`). The reader is for the lab VM: `python -m backend.pipeline <sessions> --out <dir> --read-files`, run while the files still exist, or live as events arrive. Files deleted before they are read (an extractor that cleans up) stay `unknown`.
+
+**What is read, and the limits**
+- Only files written by the burst's own process, in the documents zone (`zones.is_document_path`), and only files the process created, wrote or renamed to. Never anything else.
+- Links are never followed: each path component is checked with `lstat` (symlinks and Windows reparse points refused), and the opened file must be the one checked. Only regular files, read-only. Nothing is executed, loaded or parsed. A race between the check and the open is narrowed, not impossible.
+- Limits: files over 64 MiB or under 512 bytes are skipped (a smaller sample cannot reach 7.5 even when random), the first 64 KiB plus 64 KiB from the middle of a big file are read, at most 100 files and 16 MiB per 10 seconds, 200 files per process. A file is read at least 1 s after its last write. Running out of budget gives `unknown`.
+- The T1486 test script's output files must be at least 512 bytes, or its verdict stays `unknown`.
+
+**Evasion limits (accepted).** Ransomware that writes low-entropy output, that starts its output with a real file header matching the extension, or that encrypts only part of each file stays at `R-T1486-001`. A ransomware that only deletes or wipes writes nothing to sample and also stays there. `R-T1486-001` is still raised for all of them.
+
 ### Rule format
 
 ```yaml

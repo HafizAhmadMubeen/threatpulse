@@ -279,6 +279,7 @@ def decide(alert: dict, context: dict | None = None, policy: Policy | None = Non
         "event_type": alert["event_type"],
         "zone": obj["zone"],
         "layer": alert["layer"],
+        "rule_id": alert["rule_id"],
         "access_includes": None,  # set per rule below
         "in_lsass_allowlist": allowlisted,
         "change_approved": state == "matches_baseline",

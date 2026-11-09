@@ -28,8 +28,10 @@ export type Severity = 'Confirmed' | 'High' | 'Medium' | 'Low' | 'Not scored'
  *
  * The static score plays no part here. It sits beside the badge as a separate fact.
  */
-export function severityOf(alert: Pick<Alert, 'layer' | 'risk_score' | 'object'>): Severity {
+export function severityOf(alert: Pick<Alert, 'layer' | 'risk_score' | 'object'> & { rule_id?: string }): Severity {
   if (alert.layer === 'signature') return 'Confirmed'
+  // A delete burst plus encrypted-looking output (detection/ransom.py). Matches is_confirmed in backend/rag/prompt.py.
+  if (alert.layer === 'rule' && alert.rule_id === 'R-T1486-002') return 'Confirmed'
   if (alert.layer === 'fim' && alert.object.zone !== 'none') return 'Confirmed'
   const score = alert.risk_score
   if (score === null) return 'Not scored'  // 0 is a real score, so this is not a falsy check
